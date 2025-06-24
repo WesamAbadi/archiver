@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { getAuth } from 'firebase-admin/auth';
+import { verifyJWT, JWTPayload } from '../lib/auth';
 
 export interface AuthenticatedRequest extends Request {
   user: {
@@ -26,11 +26,11 @@ export const authenticateToken = async (
       return;
     }
 
-    const decodedToken = await getAuth().verifyIdToken(token);
+    const decoded = verifyJWT(token);
     (req as AuthenticatedRequest).user = {
-      uid: decodedToken.uid,
-      email: decodedToken.email,
-      displayName: decodedToken.name,
+      uid: decoded.uid,
+      email: decoded.email,
+      displayName: decoded.displayName,
     };
 
     next();
@@ -54,11 +54,11 @@ export const optionalAuth = async (
 
     if (token) {
       try {
-        const decodedToken = await getAuth().verifyIdToken(token);
+        const decoded = verifyJWT(token);
         (req as any).user = {
-          uid: decodedToken.uid,
-          email: decodedToken.email,
-          displayName: decodedToken.name,
+          uid: decoded.uid,
+          email: decoded.email,
+          displayName: decoded.displayName,
         };
       } catch (error) {
         // Token is invalid, but that's okay for optional auth

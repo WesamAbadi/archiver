@@ -1,20 +1,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
-import { 
-  User, 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
-  signOut, 
-  signInWithPopup, 
-  GoogleAuthProvider,
-  onAuthStateChanged 
-} from 'firebase/auth'
-import { auth } from '../lib/firebase'
+import { authService, User } from '../lib/auth'
 
 interface AuthContextType {
   user: User | null
   loading: boolean
-  login: (email: string, password: string) => Promise<void>
-  register: (email: string, password: string) => Promise<void>
   loginWithGoogle: () => Promise<void>
   logout: () => Promise<void>
   getToken: () => Promise<string | null>
@@ -39,7 +28,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = authService.onAuthStateChanged((user) => {
       setUser(user)
       setLoading(false)
     })
@@ -47,29 +36,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return unsubscribe
   }, [])
 
-  const login = async (email: string, password: string) => {
-    setLoading(true)
-    try {
-      await signInWithEmailAndPassword(auth, email, password)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const register = async (email: string, password: string) => {
-    setLoading(true)
-    try {
-      await createUserWithEmailAndPassword(auth, email, password)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   const loginWithGoogle = async () => {
     setLoading(true)
     try {
-      const provider = new GoogleAuthProvider()
-      await signInWithPopup(auth, provider)
+      await authService.signInWithGoogle()
     } finally {
       setLoading(false)
     }
@@ -78,28 +48,24 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const logout = async () => {
     setLoading(true)
     try {
-      await signOut(auth)
+      authService.signOut()
     } finally {
       setLoading(false)
     }
   }
 
   const getToken = async (): Promise<string | null> => {
-    if (!user) return null
-    return await user.getIdToken()
+    return authService.getToken()
   }
 
   const value: AuthContextType = {
     user,
     loading,
-    login,
-    register,
     loginWithGoogle,
     logout,
     getToken,
   }
 
-  // Always render children, but show loading in individual components if needed
   return (
     <AuthContext.Provider value={value}>
       {children}

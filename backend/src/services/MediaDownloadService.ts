@@ -1,21 +1,20 @@
-import { getFirestore } from 'firebase-admin/firestore';
 import ytdl from 'ytdl-core';
 import youtubeDl from 'youtube-dl-exec';
 import scdl from 'soundcloud-downloader';
 import { v4 as uuidv4 } from 'uuid';
-import { MediaItem, DownloadJob, Platform, DownloadStatus } from '../types';
+import { MediaItem, DownloadJob, Platform, DownloadStatus, Visibility } from '../types';
 import { BackblazeService } from './BackblazeService';
 import { GeminiService } from './GeminiService';
 import { createError } from '../middleware/errorHandler';
+import prisma from '../lib/database';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
 
 export class MediaDownloadService {
-  private db = getFirestore();
   private backblazeService = new BackblazeService();
   private geminiService = new GeminiService();
-  private io?: any; // Use any type to avoid import issues
+  private io?: any; // Socket.IO instance for progress updates
 
   constructor(io?: any) {
     this.io = io;
@@ -36,151 +35,160 @@ export class MediaDownloadService {
     return cleaned;
   }
 
+  // Helper method to ensure user exists and get their database ID
+  private async ensureUserExists(userUid: string): Promise<string> {
+    let user = await prisma.user.findUnique({
+      where: { uid: userUid }
+    });
+
+    if (!user) {
+      // If user doesn't exist, create them with minimal data
+      // In a real app, this should be done during authentication
+      user = await prisma.user.create({
+        data: {
+          uid: userUid,
+          email: `${userUid}@temp.example.com`, // Temporary email
+          displayName: 'User',
+        }
+      });
+      console.log('Created new user in database:', user.id);
+    }
+
+    return user.id; // Return the database ID, not the OAuth UID
+  }
+
+  // Helper method to convert BigInt fields to strings for JSON serialization
+  private serializeMediaItem(mediaItem: any): any {
+    return {
+      ...mediaItem,
+      size: mediaItem.size ? mediaItem.size.toString() : null,
+      files: mediaItem.files?.map((file: any) => ({
+        ...file,
+        size: file.size ? file.size.toString() : null
+      })) || []
+    };
+  }
+
   async processDownloadImmediate(params: {
     userId: string;
     url: string;
     platform: Platform;
-    visibility: 'private' | 'public';
+    visibility: Visibility;
     tags: string[];
-  }): Promise<{ jobId: string; mediaItem?: MediaItem }> {
-    const jobId = uuidv4();
-    
-    const job: DownloadJob = {
-      id: jobId,
-      userId: params.userId,
-      url: params.url,
-      platform: params.platform,
-      status: 'pending',
-      progress: 0,
-      createdAt: new Date(),
-    };
-    
-    await this.db.collection('downloadJobs').doc(jobId).set(job);
-    this.emitProgress(params.userId, jobId, 'pending', 0, 'Starting download...');
+  }): Promise<{ jobId: string; mediaItem: MediaItem }> {
+    const jobId = uuidv4(); // Generate job ID for progress tracking
     
     try {
-      this.emitProgress(params.userId, jobId, 'downloading', 5, 'Initializing download...');
+      // Emit initial progress
+      this.emitProgress(params.userId, jobId, 'PENDING', 0, 'Starting download...');
+      
+      // Ensure user exists and get their database ID
+      const dbUserId = await this.ensureUserExists(params.userId);
+      
+      this.emitProgress(params.userId, jobId, 'DOWNLOADING', 10, 'Initializing download...');
       
       // Download media based on platform
       const downloadResult = await this.downloadFromPlatform(params.url, params.platform, (progress, message) => {
-        this.emitProgress(params.userId, jobId, 'downloading', 5 + (progress * 0.45), message);
+        this.emitProgress(params.userId, jobId, 'DOWNLOADING', 10 + (progress * 0.4), message);
       });
       
-      this.emitProgress(params.userId, jobId, 'processing', 50, 'Uploading to cloud storage...');
+      this.emitProgress(params.userId, jobId, 'PROCESSING', 50, 'Uploading to cloud storage...');
       
       // Upload to Backblaze B2
       const uploadResult = await this.backblazeService.uploadFile(
         downloadResult.filePath,
         downloadResult.filename,
-        params.userId
+        params.userId // Still use OAuth ID for file organization
       );
       
-      this.emitProgress(params.userId, jobId, 'processing', 70, 'Generating AI metadata...');
+      this.emitProgress(params.userId, jobId, 'PROCESSING', 70, 'Generating AI metadata...');
       
       // Generate AI metadata
       const aiMetadata = await this.geminiService.generateMetadataFromFile(downloadResult.filePath);
       
-      this.emitProgress(params.userId, jobId, 'processing', 90, 'Finalizing...');
+      this.emitProgress(params.userId, jobId, 'PROCESSING', 90, 'Finalizing...');
       
-      // Create media item
-      const mediaItemData: any = {
+      // Create media item with flattened metadata structure
+      const mediaItemData = {
         id: uuidv4(),
-        userId: params.userId,
+        userId: dbUserId, // Use database user ID, not OAuth UID
         originalUrl: params.url,
         platform: params.platform,
         title: downloadResult.title || 'Untitled',
         description: downloadResult.description,
-        metadata: {
-          ...downloadResult.metadata,
-          aiGenerated: aiMetadata,
+        visibility: params.visibility,
+        tags: params.tags,
+        downloadStatus: 'COMPLETED' as DownloadStatus,
+        publicId: params.visibility === 'PUBLIC' ? uuidv4() : undefined,
+        // Flattened metadata fields
+        duration: downloadResult.metadata?.duration,
+        size: BigInt(downloadResult.size || 0),
+        format: downloadResult.format,
+        resolution: downloadResult.metadata?.resolution,
+        thumbnailUrl: downloadResult.metadata?.thumbnailUrl,
+        originalAuthor: downloadResult.metadata?.originalAuthor,
+        originalTitle: downloadResult.metadata?.originalTitle,
+        originalDescription: downloadResult.metadata?.originalDescription,
+        publishedAt: downloadResult.metadata?.publishedAt,
+        hashtags: downloadResult.metadata?.hashtags || [],
+        // AI generated metadata
+        aiSummary: aiMetadata?.summary,
+        aiKeywords: aiMetadata?.keywords || [],
+        aiCaptions: aiMetadata?.captions,
+        aiGeneratedAt: aiMetadata ? new Date() : undefined,
+      };
+
+      const mediaItem = await prisma.mediaItem.create({
+        data: mediaItemData,
+        include: {
+          files: true,
         },
-        files: [{
+      });
+
+      // Create media file entry
+      await prisma.mediaFile.create({
+        data: {
           id: uuidv4(),
+          mediaItemId: mediaItem.id,
           filename: uploadResult.filename,
           originalName: downloadResult.filename,
           mimeType: downloadResult.mimeType,
-          size: downloadResult.size,
+          size: BigInt(downloadResult.size || 0),
           b2FileId: uploadResult.fileId,
           b2FileName: uploadResult.fileName,
           downloadUrl: uploadResult.downloadUrl,
           isOriginal: true,
           format: downloadResult.format,
-        }],
-        visibility: params.visibility,
-        tags: params.tags,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        downloadStatus: 'completed',
-      };
-
-      // Only add publicId if visibility is public
-      if (params.visibility === 'public') {
-        mediaItemData.publicId = uuidv4();
-      }
-
-      const mediaItem = mediaItemData as MediaItem;
-      
-      // Clean the object to remove any undefined values
-      const cleanedMediaItem = this.cleanObject(mediaItem);
-      
-      await this.db.collection('media').doc(mediaItem.id).set(cleanedMediaItem);
-      
-      // Update job with completion
-      await this.updateJobStatus(jobId, 'completed', 100, mediaItem.id);
-      this.emitProgress(params.userId, jobId, 'completed', 100, 'Download completed successfully!', mediaItem);
+        },
+      });
       
       // Clean up temporary file
       if (fs.existsSync(downloadResult.filePath)) {
         fs.unlinkSync(downloadResult.filePath);
       }
       
-      return { jobId, mediaItem };
+      // Return serialized media item (converts BigInt to string)
+      const serializedMediaItem = this.serializeMediaItem(mediaItem);
+      
+      // Emit completion progress
+      this.emitProgress(params.userId, jobId, 'COMPLETED', 100, 'Download completed successfully!', serializedMediaItem);
+      
+      return { jobId, mediaItem: serializedMediaItem };
       
     } catch (error) {
       console.error('Download processing error:', error);
-      const errorMessage = (error as Error).message;
       
-      // Update job status in database
-      await this.updateJobStatus(jobId, 'failed', 0, undefined, errorMessage);
+      // Emit error progress
+      this.emitProgress(params.userId, jobId, 'FAILED', 0, (error as Error).message);
       
-      // Emit detailed error to user
-      this.emitProgress(params.userId, jobId, 'failed', 0, errorMessage);
-      
-      return { jobId };
-    }
-  }
-
-  private emitProgress(
-    userId: string, 
-    jobId: string, 
-    status: DownloadStatus, 
-    progress: number, 
-    message: string,
-    mediaItem?: MediaItem
-  ): void {
-    const progressData = {
-      jobId,
-      status,
-      progress,
-      message,
-      mediaItem,
-      timestamp: new Date().toISOString()
-    };
-    
-    console.log(`[PROGRESS] Emitting to user:${userId}:`, progressData);
-    
-    if (this.io) {
-      this.io.to(`user:${userId}`).emit('download-progress', progressData);
-      console.log(`[PROGRESS] Emitted successfully`);
-    } else {
-      console.log(`[ERROR] Socket.IO instance not available`);
+      throw error;
     }
   }
 
   private async downloadFromPlatform(
     url: string, 
     platform: Platform,
-    onProgress?: (progress: number, message: string) => void
+    progressCallback?: (progress: number, message: string) => void
   ): Promise<{
     filePath: string;
     filename: string;
@@ -192,21 +200,19 @@ export class MediaDownloadService {
     format: string;
   }> {
     switch (platform) {
-      case 'youtube':
-        return this.downloadFromYouTube(url, onProgress);
-      case 'twitter':
-        return this.downloadFromTwitter(url, onProgress);
-      case 'soundcloud':
-        return this.downloadFromSoundCloud(url, onProgress);
+      case 'YOUTUBE':
+        return this.downloadFromYouTube(url, progressCallback);
+      case 'TWITTER':
+        return this.downloadFromTwitter(url, progressCallback);
+      case 'SOUNDCLOUD':
+        return this.downloadFromSoundCloud(url, progressCallback);
       default:
         throw new Error(`Platform ${platform} not yet implemented`);
     }
   }
 
-  private async downloadFromYouTube(url: string, onProgress?: (progress: number, message: string) => void): Promise<any> {
+  private async downloadFromYouTube(url: string, progressCallback?: (progress: number, message: string) => void): Promise<any> {
     try {
-      onProgress?.(0, 'Fetching video info...');
-      
       const uploadDir = process.env.UPLOAD_DIR || './uploads';
       
       // Ensure upload directory exists
@@ -218,8 +224,6 @@ export class MediaDownloadService {
       const timestamp = Date.now();
       const filename = `youtube_${timestamp}`;
       const outputTemplate = path.join(uploadDir, `${filename}.%(ext)s`);
-      
-      onProgress?.(25, 'Starting download...');
       
       console.log('Starting YouTube download with template:', outputTemplate);
       console.log('YouTube URL:', url);
@@ -254,7 +258,8 @@ export class MediaDownloadService {
             const progressMatch = output.match(/(\d+(?:\.\d+)?)\s*%/);
             if (progressMatch) {
               const downloadProgress = parseFloat(progressMatch[1]);
-              onProgress?.(25 + (downloadProgress * 0.5), `Downloading... ${downloadProgress.toFixed(1)}%`);
+              console.log(`Downloading... ${downloadProgress.toFixed(1)}%`);
+              progressCallback?.(downloadProgress, output);
             }
           }
         });
@@ -263,6 +268,7 @@ export class MediaDownloadService {
           const output = data.toString();
           stderr += output;
           console.log('[yt-dlp stderr]:', output.trim());
+          progressCallback?.(0, output);
         });
         
         ytdlpProcess.on('close', (code) => {
@@ -282,11 +288,6 @@ export class MediaDownloadService {
           reject(new Error(`Failed to start yt-dlp: ${error.message}`));
         });
       });
-      
-      onProgress?.(80, 'Processing downloaded file...');
-      
-      // Add a small delay to ensure file system operations complete
-      await new Promise(resolve => setTimeout(resolve, 1000));
       
       // Find the downloaded files
       const files = fs.readdirSync(uploadDir);
@@ -388,8 +389,6 @@ export class MediaDownloadService {
             }
           }
           
-          onProgress?.(100, 'YouTube download completed');
-          
           return {
             filePath: actualFilePath,
             filename: mostRecentVideoFile,
@@ -439,8 +438,6 @@ export class MediaDownloadService {
         }
       }
       
-      onProgress?.(100, 'YouTube download completed');
-      
       return {
         filePath: actualFilePath,
         filename: downloadedFile,
@@ -468,15 +465,11 @@ export class MediaDownloadService {
     }
   }
 
-  private async downloadFromTwitter(url: string, onProgress?: (progress: number, message: string) => void): Promise<any> {
+  private async downloadFromTwitter(url: string, progressCallback?: (progress: number, message: string) => void): Promise<any> {
     try {
-      onProgress?.(10, 'Fetching Twitter media...');
-      
       const uploadDir = process.env.UPLOAD_DIR || './uploads';
       const filename = `twitter_${Date.now()}.%(ext)s`;
       const outputPath = path.join(uploadDir, filename);
-      
-      onProgress?.(25, 'Downloading media...');
       
       // Use youtube-dl-exec to download Twitter/X content
       const result = await youtubeDl(url, {
@@ -484,8 +477,6 @@ export class MediaDownloadService {
         format: 'best',
         writeInfoJson: true,
       });
-      
-      onProgress?.(80, 'Processing downloaded file...');
       
       // Find the downloaded file
       const files = fs.readdirSync(uploadDir);
@@ -509,29 +500,28 @@ export class MediaDownloadService {
         try {
           const infoContent = fs.readFileSync(path.join(uploadDir, infoFile), 'utf8');
           const info = JSON.parse(infoContent);
+          
           metadata = {
             ...metadata,
-            title: info.title || info.description,
-            description: info.description,
-            originalAuthor: info.uploader || info.channel,
-            duration: info.duration,
-            publishedAt: info.upload_date ? new Date(info.upload_date) : undefined,
+            originalAuthor: info.uploader || info.channel || 'Unknown',
+            originalTitle: info.title || 'Twitter Media',
+            originalDescription: info.description || '',
+            publishedAt: info.upload_date ? new Date(info.upload_date) : new Date(),
+            thumbnailUrl: info.thumbnail,
           };
           
           // Clean up info file
           fs.unlinkSync(path.join(uploadDir, infoFile));
         } catch (e) {
-          console.log('Could not parse info JSON');
+          console.log('Could not parse Twitter info JSON:', e.message);
         }
       }
-      
-      onProgress?.(100, 'Twitter download completed');
       
       return {
         filePath: actualFilePath,
         filename: downloadedFile,
-        title: metadata.title || 'Twitter Media',
-        description: metadata.description,
+        title: metadata.originalTitle || 'Twitter Media',
+        description: metadata.originalDescription || '',
         metadata,
         mimeType: downloadedFile.includes('.mp4') ? 'video/mp4' : 'image/jpeg',
         size: stats.size,
@@ -542,265 +532,94 @@ export class MediaDownloadService {
     }
   }
 
-  private async downloadFromSoundCloud(url: string, onProgress?: (progress: number, message: string) => void): Promise<any> {
+  private async downloadFromSoundCloud(url: string, progressCallback?: (progress: number, message: string) => void): Promise<any> {
     try {
-      onProgress?.(10, 'Fetching SoundCloud track info...');
-      
-      // Add timeout for getInfo
-      const getInfoPromise = scdl.getInfo(url);
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('SoundCloud info fetch timeout')), 30000)
-      );
-      
-      const info = await Promise.race([getInfoPromise, timeoutPromise]) as any;
-      
-      if (!info || !info.id || !info.streamable) {
-        throw new Error('Track not found or not streamable');
-      }
-      
-      onProgress?.(25, 'Starting audio download...');
-      
-      const filename = `soundcloud_${info.id}.mp3`;
-      const filePath = path.join(process.env.UPLOAD_DIR || './uploads', filename);
+      const uploadDir = process.env.UPLOAD_DIR || './uploads';
       
       // Ensure upload directory exists
-      const uploadDir = process.env.UPLOAD_DIR || './uploads';
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
       }
       
-      onProgress?.(30, 'Connecting to SoundCloud...');
+      // Use soundcloud-downloader to get track info and download
+      let trackProgress = 0;
+      let progressTimer: NodeJS.Timeout | null = null;
       
-      // Add timeout for download
-      const downloadPromise = scdl.download(url);
-      const downloadTimeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('SoundCloud download timeout')), 60000)
-      );
-      
-      const stream = await Promise.race([downloadPromise, downloadTimeoutPromise]) as any;
-      const writeStream = fs.createWriteStream(filePath);
-      
-      return new Promise((resolve, reject) => {
-        let downloadedSize = 0;
-        let lastProgressTime = Date.now();
-        let progressTimeout: NodeJS.Timeout;
-        
-        // Progress timeout detection (if no progress for 30 seconds, fail)
-        const resetProgressTimeout = () => {
-          if (progressTimeout) clearTimeout(progressTimeout);
-          progressTimeout = setTimeout(() => {
-            reject(new Error('Download stalled - no progress for 30 seconds'));
-          }, 30000);
-        };
-        
-        resetProgressTimeout();
-        
-        stream.on('data', (chunk) => {
-          downloadedSize += chunk.length;
-          const now = Date.now();
-          
-          // Only update progress every 500ms to avoid spam
-          if (now - lastProgressTime > 500) {
-            const progressPercent = Math.min(95, 30 + (downloadedSize / (1024 * 1024)) * 2); // Rough estimate
-            onProgress?.(progressPercent, `Downloading audio... ${(downloadedSize / 1024 / 1024).toFixed(1)}MB`);
-            lastProgressTime = now;
-            resetProgressTimeout();
+      const startProgressTimer = () => {
+        progressTimer = setTimeout(() => {
+          trackProgress += 5;
+          progressCallback?.(trackProgress, `Downloading... ${trackProgress}%`);
+          if (trackProgress < 90) {
+            startProgressTimer();
           }
-        });
-        
-        stream.pipe(writeStream);
-        
-        writeStream.on('finish', () => {
-          if (progressTimeout) clearTimeout(progressTimeout);
-          onProgress?.(100, 'SoundCloud download completed');
-          
-          try {
-            const stats = fs.statSync(filePath);
-            
-            if (stats.size < 1024) { // Less than 1KB suggests an error
-              throw new Error('Downloaded file is too small, download may have failed');
-            }
-            
-            resolve({
-              filePath,
-              filename,
-              title: info.title || 'Untitled Track',
-              description: info.description || '',
-              metadata: {
-                duration: Math.floor(info.duration / 1000) || 0, // Convert from ms to seconds
-                size: stats.size,
-                format: 'mp3',
-                originalAuthor: info.user?.username || 'Unknown Artist',
-                originalTitle: info.title || 'Untitled Track',
-                originalDescription: info.description || '',
-                publishedAt: info.created_at ? new Date(info.created_at) : new Date(),
-                genre: info.genre || 'Unknown',
-                playbackCount: info.playback_count || 0,
-                thumbnailUrl: info.artwork_url || info.user?.avatar_url,
-                artworkUrl: info.artwork_url,
-                waveformUrl: info.waveform_url,
-                isStreamable: info.streamable,
-                likesCount: info.likes_count || 0,
-                repostsCount: info.reposts_count || 0,
-              },
-              mimeType: 'audio/mpeg',
-              size: stats.size,
-              format: 'mp3',
-            });
-          } catch (statError) {
-            reject(new Error(`Failed to read downloaded file: ${statError.message}`));
-          }
-        });
-        
-        writeStream.on('error', (error) => {
-          if (progressTimeout) clearTimeout(progressTimeout);
-          reject(new Error(`Write error: ${error.message}`));
-        });
-        
-        stream.on('error', (error) => {
-          if (progressTimeout) clearTimeout(progressTimeout);
-          reject(new Error(`Stream error: ${error.message}`));
-        });
-        
-        // Overall timeout for the entire download process
-        setTimeout(() => {
-          if (progressTimeout) clearTimeout(progressTimeout);
-          writeStream.destroy();
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-          }
-          reject(new Error('Download timeout - process took too long'));
-        }, 300000); // 5 minutes total timeout
-      });
-    } catch (error) {
-      const errorMessage = (error as Error).message;
-      console.error('SoundCloud download error:', errorMessage);
-      
-      // Provide more specific error messages
-      if (errorMessage.includes('timeout')) {
-        throw new Error('SoundCloud download timed out. Please try again later.');
-      } else if (errorMessage.includes('not found')) {
-        throw new Error('SoundCloud track not found. Please check the URL.');
-      } else if (errorMessage.includes('streamable')) {
-        throw new Error('This SoundCloud track is not available for download.');
-      } else if (errorMessage.includes('private')) {
-        throw new Error('This SoundCloud track is private and cannot be downloaded.');
-      } else {
-        throw new Error(`SoundCloud download failed: ${errorMessage}`);
-      }
-    }
-  }
-
-  async createDownloadJob(params: {
-    userId: string;
-    url: string;
-    platform: Platform;
-    visibility: 'private' | 'public';
-    tags: string[];
-  }): Promise<string> {
-    const jobId = uuidv4();
-    
-    const job: DownloadJob = {
-      id: jobId,
-      userId: params.userId,
-      url: params.url,
-      platform: params.platform,
-      status: 'pending',
-      progress: 0,
-      createdAt: new Date(),
-    };
-    
-    await this.db.collection('downloadJobs').doc(jobId).set(job);
-    
-    // Start download process asynchronously
-    this.processDownload(jobId, params);
-    
-    return jobId;
-  }
-
-  private async processDownload(jobId: string, params: {
-    userId: string;
-    url: string;
-    platform: Platform;
-    visibility: 'private' | 'public';
-    tags: string[];
-  }): Promise<void> {
-    try {
-      await this.updateJobStatus(jobId, 'downloading', 10);
-      
-      // Download media based on platform
-      const downloadResult = await this.downloadFromPlatform(params.url, params.platform);
-      
-      await this.updateJobStatus(jobId, 'processing', 50);
-      
-      // Upload to Backblaze B2
-      const uploadResult = await this.backblazeService.uploadFile(
-        downloadResult.filePath,
-        downloadResult.filename,
-        params.userId
-      );
-      
-      await this.updateJobStatus(jobId, 'processing', 70);
-      
-      // Generate AI metadata
-      const aiMetadata = await this.geminiService.generateMetadataFromFile(downloadResult.filePath);
-      
-      await this.updateJobStatus(jobId, 'processing', 90);
-      
-      // Create media item
-      const mediaItemData: any = {
-        id: uuidv4(),
-        userId: params.userId,
-        originalUrl: params.url,
-        platform: params.platform,
-        title: downloadResult.title || 'Untitled',
-        description: downloadResult.description,
-        metadata: {
-          ...downloadResult.metadata,
-          aiGenerated: aiMetadata,
-        },
-        files: [{
-          id: uuidv4(),
-          filename: uploadResult.filename,
-          originalName: downloadResult.filename,
-          mimeType: downloadResult.mimeType,
-          size: downloadResult.size,
-          b2FileId: uploadResult.fileId,
-          b2FileName: uploadResult.fileName,
-          downloadUrl: uploadResult.downloadUrl,
-          isOriginal: true,
-          format: downloadResult.format,
-        }],
-        visibility: params.visibility,
-        tags: params.tags,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        downloadStatus: 'completed',
+        }, 1000);
       };
-
-      // Only add publicId if visibility is public
-      if (params.visibility === 'public') {
-        mediaItemData.publicId = uuidv4();
+      
+      startProgressTimer();
+      
+      const stream = await scdl.download(url);
+      
+      const filename = `soundcloud_${Date.now()}.mp3`;
+      const filePath = path.join(uploadDir, filename);
+      
+      // Pipe the stream to a file
+      const writeStream = fs.createWriteStream(filePath);
+      stream.pipe(writeStream);
+      
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on('finish', () => {
+          // Clear the progress timer when download finishes
+          if (progressTimer) {
+            clearTimeout(progressTimer);
+            progressTimer = null;
+          }
+          resolve();
+        });
+        writeStream.on('error', (error) => {
+          // Clear the progress timer on error
+          if (progressTimer) {
+            clearTimeout(progressTimer);
+            progressTimer = null;
+          }
+          reject(error);
+        });
+      });
+      
+      // Get track info
+      let trackInfo: any = {};
+      try {
+        trackInfo = await scdl.getInfo(url);
+      } catch (e) {
+        // Silently continue if track info fails
       }
-
-      const mediaItem = mediaItemData as MediaItem;
       
-      // Clean the object to remove any undefined values
-      const cleanedMediaItem = this.cleanObject(mediaItem);
+      const stats = fs.statSync(filePath);
       
-      await this.db.collection('media').doc(mediaItem.id).set(cleanedMediaItem);
+      const metadata = {
+        size: stats.size,
+        format: 'mp3',
+        duration: trackInfo.duration ? Math.floor(trackInfo.duration / 1000) : 0,
+        originalAuthor: trackInfo.user?.username || 'Unknown',
+        originalTitle: trackInfo.title || 'SoundCloud Track',
+        originalDescription: trackInfo.description || '',
+        publishedAt: trackInfo.created_at ? new Date(trackInfo.created_at) : new Date(),
+        thumbnailUrl: trackInfo.artwork_url,
+        genre: trackInfo.genre,
+        playCount: trackInfo.playback_count || 0,
+      };
       
-      // Update job with completion
-      await this.updateJobStatus(jobId, 'completed', 100, mediaItem.id);
-      
-      // Clean up temporary file
-      if (fs.existsSync(downloadResult.filePath)) {
-        fs.unlinkSync(downloadResult.filePath);
-      }
-      
+      return {
+        filePath,
+        filename,
+        title: metadata.originalTitle,
+        description: metadata.originalDescription,
+        metadata,
+        mimeType: 'audio/mpeg',
+        size: stats.size,
+        format: 'mp3',
+      };
     } catch (error) {
-      console.error('Download processing error:', error);
-      await this.updateJobStatus(jobId, 'failed', 0, undefined, (error as Error).message);
+      throw new Error(`SoundCloud download failed: ${(error as Error).message}`);
     }
   }
 
@@ -809,181 +628,182 @@ export class MediaDownloadService {
     userId: string;
     title: string;
     description?: string;
-    visibility: 'private' | 'public';
+    visibility: Visibility;
     tags: string[];
   }): Promise<MediaItem> {
     try {
+      // Ensure user exists and get their database ID
+      const dbUserId = await this.ensureUserExists(params.userId);
+      
       // Upload to Backblaze B2
       const uploadResult = await this.backblazeService.uploadFile(
         params.file.path,
         params.file.originalname,
-        params.userId
+        params.userId // Still use OAuth ID for file organization
       );
       
       // Generate AI metadata
       const aiMetadata = await this.geminiService.generateMetadataFromFile(params.file.path);
       
       // Create media item
-      const mediaItemData: any = {
+      const mediaItemData = {
         id: uuidv4(),
-        userId: params.userId,
-        originalUrl: '',
-        platform: 'direct',
+        userId: dbUserId, // Use database user ID, not OAuth UID
+        originalUrl: 'direct-upload',
+        platform: 'DIRECT' as Platform,
         title: params.title,
         description: params.description,
-        metadata: {
-          size: params.file.size,
-          format: path.extname(params.file.originalname).slice(1),
-          aiGenerated: aiMetadata,
+        visibility: params.visibility,
+        tags: params.tags,
+        downloadStatus: 'COMPLETED' as DownloadStatus,
+        publicId: params.visibility === 'PUBLIC' ? uuidv4() : undefined,
+        // File metadata
+        size: BigInt(params.file.size),
+        format: path.extname(params.file.originalname).slice(1),
+        // AI generated
+        aiSummary: aiMetadata?.summary,
+        aiKeywords: aiMetadata?.keywords || [],
+        aiCaptions: aiMetadata?.captions,
+        aiGeneratedAt: aiMetadata ? new Date() : undefined,
+      };
+
+      const mediaItem = await prisma.mediaItem.create({
+        data: mediaItemData,
+        include: {
+          files: true,
         },
-        files: [{
+      });
+
+      // Create media file
+      await prisma.mediaFile.create({
+        data: {
           id: uuidv4(),
+          mediaItemId: mediaItem.id,
           filename: uploadResult.filename,
           originalName: params.file.originalname,
           mimeType: params.file.mimetype,
-          size: params.file.size,
+          size: BigInt(params.file.size),
           b2FileId: uploadResult.fileId,
           b2FileName: uploadResult.fileName,
           downloadUrl: uploadResult.downloadUrl,
           isOriginal: true,
           format: path.extname(params.file.originalname).slice(1),
-        }],
-        visibility: params.visibility,
-        tags: params.tags,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        downloadStatus: 'completed',
-      };
-
-      // Only add publicId if visibility is public
-      if (params.visibility === 'public') {
-        mediaItemData.publicId = uuidv4();
-      }
-
-      const mediaItem = mediaItemData as MediaItem;
-      
-      // Clean the object to remove any undefined values
-      const cleanedMediaItem = this.cleanObject(mediaItem);
-      
-      await this.db.collection('media').doc(mediaItem.id).set(cleanedMediaItem);
+        },
+      });
       
       // Clean up temporary file
       if (fs.existsSync(params.file.path)) {
         fs.unlinkSync(params.file.path);
       }
       
-      return mediaItem;
+      // Return serialized media item (converts BigInt to string)
+      return this.serializeMediaItem(mediaItem);
     } catch (error) {
-      throw createError(`Upload processing failed: ${(error as Error).message}`, 500);
+      // Clean up temporary file on error
+      if (fs.existsSync(params.file.path)) {
+        fs.unlinkSync(params.file.path);
+      }
+      throw error;
     }
-  }
-
-  private async updateJobStatus(
-    jobId: string, 
-    status: DownloadStatus, 
-    progress: number, 
-    mediaItemId?: string, 
-    error?: string
-  ): Promise<void> {
-    const updateData: any = {
-      status,
-      progress,
-      updatedAt: new Date(),
-    };
-    
-    if (mediaItemId) updateData.mediaItemId = mediaItemId;
-    if (error) updateData.error = error;
-    
-    await this.db.collection('downloadJobs').doc(jobId).update(updateData);
-  }
-
-  async getJobStatus(jobId: string, userId: string): Promise<DownloadJob | null> {
-    const jobDoc = await this.db.collection('downloadJobs').doc(jobId).get();
-    
-    if (!jobDoc.exists) {
-      return null;
-    }
-    
-    const job = jobDoc.data() as DownloadJob;
-    
-    // Ensure user owns this job
-    if (job.userId !== userId) {
-      throw createError('Unauthorized access to job', 403);
-    }
-    
-    return job;
   }
 
   async getMediaItem(id: string, userId: string): Promise<MediaItem | null> {
-    const mediaDoc = await this.db.collection('media').doc(id).get();
+    // Convert OAuth UID to database user ID
+    const dbUserId = await this.ensureUserExists(userId);
     
-    if (!mediaDoc.exists) {
-      return null;
-    }
+    const mediaItem = await prisma.mediaItem.findFirst({
+      where: {
+        id: id,
+        userId: dbUserId,
+      },
+      include: {
+        files: true,
+      },
+    });
     
-    const media = mediaDoc.data() as MediaItem;
-    
-    // Ensure user owns this media item
-    if (media.userId !== userId) {
-      throw createError('Unauthorized access to media item', 403);
-    }
-    
-    return { ...media, id: mediaDoc.id };
+    return mediaItem ? this.serializeMediaItem(mediaItem) : null;
   }
 
   async updateMediaItem(id: string, userId: string, updates: {
     title?: string;
     description?: string;
-    visibility?: 'private' | 'public';
+    visibility?: Visibility;
     tags?: string[];
   }): Promise<MediaItem> {
-    const mediaDoc = await this.db.collection('media').doc(id).get();
+    // Convert OAuth UID to database user ID
+    const dbUserId = await this.ensureUserExists(userId);
     
-    if (!mediaDoc.exists) {
-      throw createError('Media item not found', 404);
-    }
+    const mediaItem = await prisma.mediaItem.update({
+      where: {
+        id: id,
+        userId: dbUserId,
+      },
+      data: updates,
+      include: {
+        files: true,
+      },
+    });
     
-    const media = mediaDoc.data() as MediaItem;
-    
-    if (media.userId !== userId) {
-      throw createError('Unauthorized access to media item', 403);
-    }
-    
-    const updateData: any = {
-      ...updates,
-      updatedAt: new Date(),
-    };
-    
-    // Generate public ID if visibility changed to public
-    if (updates.visibility === 'public' && !media.publicId) {
-      updateData.publicId = uuidv4();
-    }
-    
-    await this.db.collection('media').doc(id).update(updateData);
-    
-    const updatedDoc = await this.db.collection('media').doc(id).get();
-    return { id: updatedDoc.id, ...updatedDoc.data() } as MediaItem;
+    return this.serializeMediaItem(mediaItem);
   }
 
   async deleteMediaItem(id: string, userId: string): Promise<void> {
-    const mediaDoc = await this.db.collection('media').doc(id).get();
+    // Convert OAuth UID to database user ID
+    const dbUserId = await this.ensureUserExists(userId);
     
-    if (!mediaDoc.exists) {
-      throw createError('Media item not found', 404);
-    }
+    // Get media item to access files for cleanup
+    const mediaItem = await prisma.mediaItem.findFirst({
+      where: {
+        id: id,
+        userId: dbUserId,
+      },
+      include: {
+        files: true,
+      },
+    });
     
-    const media = mediaDoc.data() as MediaItem;
-    
-    if (media.userId !== userId) {
-      throw createError('Unauthorized access to media item', 403);
+    if (!mediaItem) {
+      throw new Error('Media item not found');
     }
     
     // Delete files from Backblaze B2
-    for (const file of media.files) {
-      await this.backblazeService.deleteFile(file.b2FileId);
+    for (const file of mediaItem.files) {
+      try {
+        await this.backblazeService.deleteFile(file.b2FileId);
+      } catch (error) {
+        console.error('Error deleting file from B2:', error);
+      }
     }
     
-    // Delete from Firestore
-    await this.db.collection('media').doc(id).delete();
+    // Delete from database (Prisma will handle cascading deletes)
+    await prisma.mediaItem.delete({
+      where: {
+        id: id,
+        userId: dbUserId,
+      },
+    });
+  }
+
+  // Emit progress update to user via Socket.IO
+  private emitProgress(
+    userId: string, 
+    jobId: string, 
+    status: DownloadStatus, 
+    progress: number, 
+    message: string,
+    mediaItem?: any
+  ): void {
+    const progressData = {
+      jobId,
+      status,
+      progress,
+      message,
+      mediaItem,
+      timestamp: new Date().toISOString()
+    };
+    
+    if (this.io) {
+      this.io.to(`user:${userId}`).emit('download-progress', progressData);
+    }
   }
 } 

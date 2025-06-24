@@ -1,39 +1,41 @@
-export interface User {
-  uid: string;
-  email: string;
-  displayName?: string;
-  photoURL?: string;
-  createdAt: Date;
-  preferences: UserPreferences;
+import { User as PrismaUser, MediaItem as PrismaMediaItem, MediaFile as PrismaMediaFile, DownloadJob as PrismaDownloadJob, Platform, DownloadStatus, Visibility, SortOrder } from '@prisma/client';
+
+// Re-export Prisma enums
+export { Platform, DownloadStatus, Visibility, SortOrder };
+
+// Enhanced types that include relations
+export interface User extends PrismaUser {
+  mediaItems?: MediaItem[];
+  downloadJobs?: DownloadJob[];
 }
 
+export interface MediaItem extends PrismaMediaItem {
+  user?: User;
+  files?: MediaFile[];
+  downloadJobs?: DownloadJob[];
+}
+
+export interface MediaFile extends PrismaMediaFile {
+  mediaItem?: MediaItem;
+}
+
+export interface DownloadJob extends PrismaDownloadJob {
+  user?: User;
+  mediaItem?: MediaItem;
+}
+
+// Legacy interface for backward compatibility
 export interface UserPreferences {
-  defaultVisibility: 'private' | 'public';
-  sortOrder: 'newest' | 'oldest' | 'title';
+  defaultVisibility: Visibility;
+  sortOrder: SortOrder;
   autoGenerateMetadata: boolean;
   notificationsEnabled: boolean;
 }
 
-export interface MediaItem {
-  id: string;
-  userId: string;
-  originalUrl: string;
-  platform: Platform;
-  title: string;
-  description?: string;
-  metadata: MediaMetadata;
-  files: MediaFile[];
-  visibility: 'private' | 'public';
-  tags: string[];
-  createdAt: Date;
-  updatedAt: Date;
-  downloadStatus: DownloadStatus;
-  publicId?: string;
-}
-
+// Legacy interface for backward compatibility - now flattened in MediaItem
 export interface MediaMetadata {
   duration?: number;
-  size: number;
+  size: bigint;
   format: string;
   resolution?: string;
   thumbnailUrl?: string;
@@ -48,48 +50,6 @@ export interface MediaMetadata {
     captions?: string;
     generatedAt: Date;
   };
-}
-
-export interface MediaFile {
-  id: string;
-  filename: string;
-  originalName: string;
-  mimeType: string;
-  size: number;
-  b2FileId: string;
-  b2FileName: string;
-  downloadUrl: string;
-  isOriginal: boolean;
-  format: string;
-}
-
-export type Platform = 
-  | 'youtube' 
-  | 'soundcloud' 
-  | 'twitter' 
-  | 'tiktok' 
-  | 'instagram' 
-  | 'twitch' 
-  | 'reddit'
-  | 'direct';
-
-export type DownloadStatus = 
-  | 'pending' 
-  | 'downloading' 
-  | 'processing' 
-  | 'completed' 
-  | 'failed';
-
-export interface DownloadJob {
-  id: string;
-  userId: string;
-  url: string;
-  platform: Platform;
-  status: DownloadStatus;
-  progress: number;
-  error?: string;
-  mediaItemId?: string;
-  createdAt: Date;
 }
 
 export interface APIResponse<T = any> {

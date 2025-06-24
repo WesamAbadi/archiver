@@ -128,10 +128,30 @@ export function WatchPage() {
   const likeMutation = useMutation(
     () => publicAPI.toggleLike(id!),
     {
-      onSuccess: () => {
-        queryClient.invalidateQueries(['public-media', id])
-        toast.success('👍 Liked!')
+      onSuccess: (response) => {
+        // Update the media item in the cache with new engagement data
+        queryClient.setQueryData(['public-media', id], (oldData: any) => {
+          if (oldData?.data?.data) {
+            return {
+              ...oldData,
+              data: {
+                ...oldData.data,
+                data: {
+                  ...oldData.data.data,
+                  engagement: response.data.data.engagement
+                }
+              }
+            }
+          }
+          return oldData
+        })
+        
+        const action = response.data.data.action
+        toast.success(action === 'liked' ? '❤️ Liked!' : '💔 Unliked!')
       },
+      onError: () => {
+        toast.error('Failed to update like status')
+      }
     }
   )
 
@@ -139,11 +159,35 @@ export function WatchPage() {
   const commentMutation = useMutation(
     (content: string) => publicAPI.addComment(id!, content),
     {
-      onSuccess: () => {
+      onSuccess: (response) => {
         setComment('')
-        queryClient.invalidateQueries(['public-media', id])
+        
+        // Update the media item in the cache with new comment and engagement data
+        queryClient.setQueryData(['public-media', id], (oldData: any) => {
+          if (oldData?.data?.data) {
+            const newComment = response.data.data.comment
+            const updatedComments = [newComment, ...oldData.data.data.comments]
+            
+            return {
+              ...oldData,
+              data: {
+                ...oldData.data,
+                data: {
+                  ...oldData.data.data,
+                  comments: updatedComments,
+                  engagement: response.data.data.engagement
+                }
+              }
+            }
+          }
+          return oldData
+        })
+        
         toast.success('💬 Comment added!')
       },
+      onError: () => {
+        toast.error('Failed to add comment')
+      }
     }
   )
 

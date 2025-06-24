@@ -24,31 +24,27 @@ export function DownloadProgress({ isVisible, jobId, onClose }: DownloadProgress
   const [socket, setSocket] = useState<Socket | null>(null)
   const [currentProgress, setCurrentProgress] = useState<ProgressUpdate | null>(null)
   const [isConnected, setIsConnected] = useState(false)
+  const [autoCloseTimer, setAutoCloseTimer] = useState<number | null>(null)
 
   // Show modal if either isVisible is true or jobId is provided
   const shouldShow = isVisible || !!jobId
 
   useEffect(() => {
     if (shouldShow && user) {
-      console.log('[PROGRESS] Initializing WebSocket connection for user:', user.uid)
-      
       // Initialize socket connection
       const newSocket = io(import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:3003')
       
       newSocket.on('connect', () => {
-        console.log('[PROGRESS] Connected to WebSocket server, socket ID:', newSocket.id)
         setIsConnected(true)
         // Join user-specific room
-        console.log('[PROGRESS] Joining room for user:', user.uid)
         newSocket.emit('join-room', user.uid)
       })
 
       newSocket.on('joined-room', (data) => {
-        console.log('[PROGRESS] Successfully joined room:', data)
+        // Room joined successfully
       })
 
       newSocket.on('disconnect', () => {
-        console.log('[PROGRESS] Disconnected from WebSocket server')
         setIsConnected(false)
       })
 
@@ -58,8 +54,6 @@ export function DownloadProgress({ isVisible, jobId, onClose }: DownloadProgress
       })
 
       newSocket.on('download-progress', (data: ProgressUpdate) => {
-        console.log('[PROGRESS] Received progress update:', data)
-        
         // Update progress for the current job or if we have a temporary job ID
         const isRelevantUpdate = !jobId || data.jobId === jobId || jobId.startsWith('temp_')
         
@@ -74,14 +68,27 @@ export function DownloadProgress({ isVisible, jobId, onClose }: DownloadProgress
           // Show success toast when completed
           if (data.status === 'completed') {
             toast.success('Download completed successfully!')
-            setTimeout(() => {
-              onClose()
-            }, 3000)
+            // Start countdown for auto-close
+            let countdown = 3;
+            setAutoCloseTimer(countdown);
+            
+            const countdownInterval = setInterval(() => {
+              countdown--;
+              setAutoCloseTimer(countdown);
+              
+              if (countdown <= 0) {
+                clearInterval(countdownInterval);
+                onClose();
+              }
+            }, 1000);
+            
           } else if (data.status === 'failed') {
             toast.error(`Download failed: ${data.message}`)
+            // Auto-close on failure too after a moment
+            setTimeout(() => {
+              onClose()
+            }, 2000)
           }
-        } else {
-          console.log('[PROGRESS] Ignoring progress for different job:', data.jobId)
         }
       })
 
@@ -89,7 +96,6 @@ export function DownloadProgress({ isVisible, jobId, onClose }: DownloadProgress
 
       // If we have a jobId, immediately show the progress modal with initial state
       if (jobId) {
-        console.log('[PROGRESS] Setting initial progress state for job:', jobId)
         setCurrentProgress({
           jobId,
           status: 'pending',
@@ -100,7 +106,6 @@ export function DownloadProgress({ isVisible, jobId, onClose }: DownloadProgress
       }
 
       return () => {
-        console.log('[PROGRESS] Cleaning up WebSocket connection')
         newSocket.disconnect()
         setSocket(null)
         setIsConnected(false)
@@ -167,14 +172,13 @@ export function DownloadProgress({ isVisible, jobId, onClose }: DownloadProgress
             </h3>
           </div>
           
-          {status === 'completed' || status === 'failed' ? (
-            <button
-              onClick={onClose}
-              className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors p-1 hover:bg-[var(--bg-hover)] rounded-lg"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          ) : null}
+          {/* Show close button for completed/failed, or always show for manual close */}
+          <button
+            onClick={onClose}
+            className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors p-1 hover:bg-[var(--bg-hover)] rounded-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         {/* Connection Status */}
@@ -265,6 +269,11 @@ export function DownloadProgress({ isVisible, jobId, onClose }: DownloadProgress
                 </div>
               )}
             </div>
+            {autoCloseTimer && autoCloseTimer > 0 && (
+              <div className="mt-3 text-xs text-[var(--text-muted)] text-center">
+                Auto-closing in {autoCloseTimer} seconds... (click X to close now)
+              </div>
+            )}
           </div>
         )}
 

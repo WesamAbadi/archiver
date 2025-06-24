@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth'
-import { auth } from '../lib/firebase'
+import { authService } from '../lib/auth'
 import { Loader2, Zap, Lock, Mail, User as UserIcon, ArrowRight } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -10,6 +9,7 @@ export function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const { user } = useAuth()
   const navigate = useNavigate()
+  const googleButtonRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (user) {
@@ -17,16 +17,34 @@ export function LoginPage() {
     }
   }, [user, navigate])
 
+  useEffect(() => {
+    // Render Google sign-in button when component mounts
+    if (googleButtonRef.current && !user) {
+      authService.renderSignInButton(googleButtonRef.current, {
+        theme: 'filled_blue',
+        size: 'large',
+        text: 'signin_with',
+        width: 280
+      }).catch(error => {
+        console.error('Failed to render Google button:', error);
+        toast.error('Failed to load Google sign-in');
+      });
+    }
+  }, [user]);
+
   const handleGoogleLogin = async () => {
     setIsLoading(true)
     try {
-      const provider = new GoogleAuthProvider()
-      await signInWithPopup(auth, provider)
+      // Try one-tap sign-in first, but if it fails, the button will handle it
+      await authService.signInWithGoogle()
       toast.success('Welcome to ArchiveDrop!')
       navigate('/dashboard')
     } catch (error: any) {
       console.error('Login error:', error)
-      toast.error('Failed to sign in. Please try again.')
+      // Don't show error for "Please use the Google sign-in button" - that's expected
+      if (!error.message.includes('Please use the Google sign-in button')) {
+        toast.error('Failed to sign in. Please try again.')
+      }
     } finally {
       setIsLoading(false)
     }
@@ -61,11 +79,17 @@ export function LoginPage() {
 
           {/* Login Methods */}
           <div className="space-y-4">
-            {/* Google Login */}
+            {/* Google Login Button Container */}
+            <div className="flex justify-center">
+              <div ref={googleButtonRef} className="w-full max-w-xs"></div>
+            </div>
+
+            {/* Fallback Button (if Google button fails to load) */}
             <button
               onClick={handleGoogleLogin}
               disabled={isLoading}
               className="w-full btn btn-primary group relative overflow-hidden"
+              style={{ display: 'none' }} // Hidden by default, can be shown if needed
             >
               <div className="absolute inset-0 bg-gradient-to-r from-[var(--accent-blue)] to-[var(--accent-purple)] opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
               <div className="relative flex items-center justify-center space-x-3">
@@ -122,14 +146,7 @@ export function LoginPage() {
               
               <div className="text-center">
                 <p className="text-sm text-[var(--text-muted)]">
-                  New to ArchiveDrop? 
-                  <button
-                    onClick={handleGoogleLogin}
-                    disabled={isLoading}
-                    className="ml-1 text-[var(--accent-blue)] hover:text-[var(--accent-purple)] font-medium transition-colors"
-                  >
-                    Sign up free
-                  </button>
+                  New to ArchiveDrop? Click the Google button above to get started!
                 </p>
               </div>
             </div>

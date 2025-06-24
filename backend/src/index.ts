@@ -4,31 +4,25 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
-import { initializeApp } from 'firebase-admin/app';
-import { credential } from 'firebase-admin';
+import prisma from './lib/database';
 import { errorHandler } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
 
 // Load environment variables
 dotenv.config();
 
-// Initialize Firebase Admin
-const firebaseConfig = {
-  type: 'service_account',
-  project_id: process.env.FIREBASE_PROJECT_ID,
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-  private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  client_email: process.env.FIREBASE_CLIENT_EMAIL,
-  client_id: process.env.FIREBASE_CLIENT_ID,
-  auth_uri: process.env.FIREBASE_AUTH_URI,
-  token_uri: process.env.FIREBASE_TOKEN_URI,
-};
+// Validate database connection
+async function validateDatabaseConnection() {
+  try {
+    await prisma.$connect();
+    console.log('✅ Database connected successfully');
+  } catch (error) {
+    console.error('❌ Database connection failed:', error);
+    process.exit(1);
+  }
+}
 
-initializeApp({
-  credential: credential.cert(firebaseConfig as any),
-});
-
-// Import routes AFTER Firebase initialization
+// Import routes
 import authRoutes from './routes/auth';
 import mediaRoutes from './routes/media';
 import archiveRoutes from './routes/archive';
@@ -96,8 +90,18 @@ app.get('/health', (req, res) => {
 // Error handling middleware (must be last)
 app.use(errorHandler);
 
-server.listen(PORT, () => {
-  console.log(`🚀 ArchiveDrop backend running on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`🔌 WebSocket server ready for real-time updates`);
+// Start server after validating database connection
+async function startServer() {
+  await validateDatabaseConnection();
+  
+  server.listen(PORT, () => {
+    console.log(`🚀 ArchiveDrop backend running on port ${PORT}`);
+    console.log(`📊 Health check: http://localhost:${PORT}/health`);
+    console.log(`🔌 WebSocket server ready for real-time updates`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
 }); 

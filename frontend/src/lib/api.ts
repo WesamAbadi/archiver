@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { auth } from './firebase'
+import { authService } from './auth'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3003/api'
 
@@ -10,9 +10,8 @@ export const api = axios.create({
 // Request interceptor to add auth token
 api.interceptors.request.use(async (config) => {
   try {
-    const user = auth.currentUser
-    if (user) {
-      const token = await user.getIdToken()
+    const token = authService.getToken()
+    if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
   } catch (error) {
@@ -26,7 +25,8 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Only redirect if not already on login page
+      // Clear invalid token and redirect to login
+      authService.signOut()
       if (window.location.pathname !== '/login') {
         console.log('API 401 error, redirecting to login')
         window.location.href = '/login'
@@ -61,24 +61,21 @@ export interface MediaItem {
   platform: string
   title: string
   description?: string
-  metadata: {
-    duration?: number
-    size: number
-    format: string
-    resolution?: string
-    thumbnailUrl?: string
-    originalAuthor?: string
-    originalTitle?: string
-    originalDescription?: string
-    publishedAt?: string
-    hashtags?: string[]
-    aiGenerated: {
-      summary?: string
-      keywords?: string[]
-      captions?: string
-      generatedAt: string
-    }
-  }
+  // Flattened metadata fields from new schema
+  duration?: number
+  size: number
+  format: string
+  resolution?: string
+  thumbnailUrl?: string
+  originalAuthor?: string
+  originalTitle?: string
+  originalDescription?: string
+  publishedAt?: string
+  hashtags?: string[]
+  aiSummary?: string
+  aiKeywords?: string[]
+  aiCaptions?: string
+  aiGeneratedAt?: string
   files: {
     id: string
     filename: string
@@ -89,11 +86,11 @@ export interface MediaItem {
     isOriginal: boolean
     format: string
   }[]
-  visibility: 'private' | 'public'
+  visibility: 'PRIVATE' | 'PUBLIC'
   tags: string[]
   createdAt: string
   updatedAt: string
-  downloadStatus: 'pending' | 'downloading' | 'processing' | 'completed' | 'failed'
+  downloadStatus: 'PENDING' | 'DOWNLOADING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
   publicId?: string
 }
 
@@ -102,7 +99,7 @@ export interface DownloadJob {
   userId: string
   url: string
   platform: string
-  status: 'pending' | 'downloading' | 'processing' | 'completed' | 'failed'
+  status: 'PENDING' | 'DOWNLOADING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
   progress: number
   error?: string
   mediaItemId?: string
@@ -111,8 +108,10 @@ export interface DownloadJob {
 
 // Auth API
 export const authAPI = {
+  googleLogin: (token: string) => api.post('/auth/google', { token }),
   getMe: () => api.get('/auth/me'),
-  updatePreferences: (preferences: any) => api.patch('/auth/preferences', { preferences }),
+  updatePreferences: (preferences: any) => api.patch('/auth/preferences', preferences),
+  updateProfile: (data: any) => api.patch('/auth/profile', data),
 }
 
 // Media API

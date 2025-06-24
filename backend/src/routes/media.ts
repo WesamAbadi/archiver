@@ -6,6 +6,8 @@ import { MediaDownloadService } from '../services/MediaDownloadService';
 import { GeminiService } from '../services/GeminiService';
 import { BackblazeService } from '../services/BackblazeService';
 import { detectPlatform, validateUrl } from '../utils/urlUtils';
+import { Visibility, Platform } from '../types';
+import prisma from '../lib/database';
 
 const router: Router = Router();
 const upload = multer({ 
@@ -16,9 +18,9 @@ const upload = multer({
 const geminiService = new GeminiService();
 const backblazeService = new BackblazeService();
 
-// Submit a URL for immediate download and archiving with real-time progress
+// Submit a URL for immediate download and archiving
 router.post('/submit', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const { url, visibility = 'private', tags = [] } = req.body;
+  const { url, visibility = 'PRIVATE', tags = [] } = req.body;
   
   if (!url || !validateUrl(url)) {
     throw createError('Valid URL is required', 400);
@@ -34,61 +36,27 @@ router.post('/submit', authenticateToken, asyncHandler(async (req: Authenticated
   const mediaDownloadService = new MediaDownloadService(io);
   
   try {
-    // Start immediate download with real-time progress
+    // Start immediate download processing with real-time progress
     const result = await mediaDownloadService.processDownloadImmediate({
       userId: req.user.uid,
       url,
-      platform,
-      visibility,
+      platform: platform.toUpperCase() as Platform,
+      visibility: visibility.toUpperCase() as Visibility,
       tags,
     });
     
-    // Always return the jobId and mediaItem if completed
     res.json({ 
       success: true, 
-      data: { 
+      data: {
         jobId: result.jobId,
-        mediaItem: result.mediaItem,
-        message: result.mediaItem ? 'Download completed successfully!' : 'Download completed with real-time progress!'
-      } 
+        mediaItem: result.mediaItem
+      },
+      message: 'Download completed successfully!'
     });
   } catch (error) {
     console.error('Download error:', error);
     throw createError(`Download failed: ${(error as Error).message}`, 500);
   }
-}));
-
-// Submit a URL for background processing (legacy endpoint)
-router.post('/submit-job', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const { url, visibility = 'private', tags = [] } = req.body;
-  
-  if (!url || !validateUrl(url)) {
-    throw createError('Valid URL is required', 400);
-  }
-  
-  const platform = detectPlatform(url);
-  if (!platform) {
-    throw createError('Unsupported platform', 400);
-  }
-  
-  const mediaDownloadService = new MediaDownloadService();
-  
-  // Create a download job for background processing
-  const jobId = await mediaDownloadService.createDownloadJob({
-    userId: req.user.uid,
-    url,
-    platform,
-    visibility,
-    tags,
-  });
-  
-  res.json({ 
-    success: true, 
-    data: { 
-      jobId, 
-      message: 'Download job created. You will be notified when complete.' 
-    } 
-  });
 }));
 
 // Upload media file directly
@@ -97,7 +65,7 @@ router.post('/upload', authenticateToken, upload.single('file'), asyncHandler(as
     throw createError('No file uploaded', 400);
   }
   
-  const { title, description, visibility = 'private', tags = [] } = req.body;
+  const { title, description, visibility = 'PRIVATE', tags = [] } = req.body;
   
   const mediaDownloadService = new MediaDownloadService();
   
@@ -107,18 +75,11 @@ router.post('/upload', authenticateToken, upload.single('file'), asyncHandler(as
     userId: req.user.uid,
     title,
     description,
-    visibility,
+    visibility: visibility.toUpperCase() as Visibility,
     tags: JSON.parse(tags || '[]'),
   });
   
   res.json({ success: true, data: mediaItem });
-}));
-
-// Get download job status
-router.get('/job/:jobId', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const mediaDownloadService = new MediaDownloadService();
-  const job = await mediaDownloadService.getJobStatus(req.params.jobId, req.user.uid);
-  res.json({ success: true, data: job });
 }));
 
 // Get media item by ID
@@ -136,7 +97,7 @@ router.patch('/:id', authenticateToken, asyncHandler(async (req: AuthenticatedRe
   const updatedItem = await mediaDownloadService.updateMediaItem(req.params.id, req.user.uid, {
     title,
     description,
-    visibility,
+    visibility: visibility ? visibility.toUpperCase() as Visibility : undefined,
     tags,
   });
   
@@ -158,41 +119,32 @@ router.post('/:id/generate-metadata', authenticateToken, asyncHandler(async (req
 
 // Fix download URLs for existing media items
 router.post('/fix-urls', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const mediaDownloadService = new MediaDownloadService();
-  const backblazeService = new BackblazeService();
-  
-  // Get all media items for the user
-  const db = require('firebase-admin/firestore').getFirestore();
-  const mediaQuery = await db.collection('media')
-    .where('userId', '==', req.user.uid)
-    .get();
+  // Get all media items for the user with their files
+  const mediaItems = await prisma.mediaItem.findMany({
+    where: {
+      userId: req.user.uid,
+    },
+    include: {
+      files: true,
+    },
+  });
   
   let fixedCount = 0;
   
-  for (const doc of mediaQuery.docs) {
-    const mediaItem = doc.data();
-    
+  for (const mediaItem of mediaItems) {
     if (mediaItem.files && mediaItem.files.length > 0) {
-      const updatedFiles = [];
-      
       for (const file of mediaItem.files) {
         if (file.b2FileName) {
           // Generate new correct URL
           const newDownloadUrl = await backblazeService.getDownloadUrl(file.b2FileName);
           
-          updatedFiles.push({
-            ...file,
-            downloadUrl: newDownloadUrl
+          // Update the file record
+          await prisma.mediaFile.update({
+            where: { id: file.id },
+            data: { downloadUrl: newDownloadUrl },
           });
-        } else {
-          updatedFiles.push(file);
         }
       }
-      
-      // Update the document
-      await db.collection('media').doc(doc.id).update({
-        files: updatedFiles
-      });
       
       fixedCount++;
     }

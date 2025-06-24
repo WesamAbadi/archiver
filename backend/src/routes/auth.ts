@@ -1,66 +1,158 @@
 import { Router } from 'express';
-import { getFirestore } from 'firebase-admin/firestore';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
-import { User, UserPreferences } from '../types';
+import { verifyGoogleToken, generateJWT, findOrCreateUser } from '../lib/auth';
+import prisma from '../lib/database';
+import { UserPreferences, Visibility, SortOrder } from '../types';
 
 const router: Router = Router();
-const db = getFirestore();
+
+// Debug endpoint to check configuration
+router.get('/debug', asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      googleClientId: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Not set',
+      jwtSecret: process.env.JWT_SECRET ? 'Set' : 'Not set',
+      databaseUrl: process.env.DATABASE_URL ? 'Set' : 'Not set',
+      environment: process.env.NODE_ENV || 'development',
+    },
+  });
+}));
+
+// Google OAuth login
+router.post('/google', asyncHandler(async (req, res) => {
+  const { token } = req.body;
+  
+  if (!token) {
+    res.status(400).json({
+      success: false,
+      error: 'Google token is required',
+    });
+    return;
+  }
+  
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    res.status(500).json({
+      success: false,
+      error: 'Google Client ID not configured on server',
+    });
+    return;
+  }
+
+  if (!process.env.JWT_SECRET) {
+    res.status(500).json({
+      success: false,
+      error: 'JWT Secret not configured on server',
+    });
+    return;
+  }
+  
+  try {
+    console.log('Verifying Google token...');
+    // Verify Google token
+    const googlePayload = await verifyGoogleToken(token);
+    console.log('Google token verified for user:', googlePayload.email);
+    
+    // Find or create user
+    const user = await findOrCreateUser(googlePayload);
+    console.log('User found/created:', user.email);
+    
+    // Generate JWT
+    const jwt = generateJWT({
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName || undefined,
+    });
+    console.log('JWT generated successfully');
+    
+    res.json({
+      success: true,
+      data: {
+        user,
+        token: jwt,
+      },
+    });
+  } catch (error) {
+    console.error('Google auth error:', error);
+    res.status(401).json({
+      success: false,
+      error: `Authentication failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    });
+  }
+}));
 
 // Get current user profile
 router.get('/me', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const userDoc = await db.collection('users').doc(req.user.uid).get();
+  const user = await prisma.user.findUnique({
+    where: { uid: req.user.uid },
+  });
   
-  if (!userDoc.exists) {
-    // Create user profile if it doesn't exist
-    const newUser: User = {
-      uid: req.user.uid,
-      email: req.user.email!,
-      displayName: req.user.displayName || '',
-      createdAt: new Date(),
-      preferences: {
-        defaultVisibility: 'private',
-        sortOrder: 'newest',
-        autoGenerateMetadata: true,
-        notificationsEnabled: true,
-      },
-    };
-    
-    await db.collection('users').doc(req.user.uid).set(newUser);
-    res.json({ success: true, data: newUser });
-  } else {
-    res.json({ success: true, data: userDoc.data() });
+  if (!user) {
+    res.status(404).json({
+      success: false,
+      error: 'User not found',
+    });
+    return;
   }
+  
+  res.json({ success: true, data: user });
 }));
 
 // Update user preferences
 router.patch('/preferences', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const { preferences } = req.body;
+  const { 
+    defaultVisibility, 
+    sortOrder, 
+    autoGenerateMetadata, 
+    notificationsEnabled 
+  } = req.body;
   
-  await db.collection('users').doc(req.user.uid).update({
-    preferences,
-    updatedAt: new Date(),
+  const updateData: any = {};
+  
+  if (defaultVisibility !== undefined) {
+    updateData.defaultVisibility = defaultVisibility as Visibility;
+  }
+  if (sortOrder !== undefined) {
+    updateData.sortOrder = sortOrder as SortOrder;
+  }
+  if (autoGenerateMetadata !== undefined) {
+    updateData.autoGenerateMetadata = autoGenerateMetadata;
+  }
+  if (notificationsEnabled !== undefined) {
+    updateData.notificationsEnabled = notificationsEnabled;
+  }
+  
+  const user = await prisma.user.update({
+    where: { uid: req.user.uid },
+    data: updateData,
   });
   
-  res.json({ success: true, message: 'Preferences updated successfully' });
+  res.json({ success: true, data: user });
+}));
+
+// Update user profile
+router.patch('/profile', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const { displayName, photoURL } = req.body;
+  
+  const updateData: any = {};
+  if (displayName !== undefined) updateData.displayName = displayName;
+  if (photoURL !== undefined) updateData.photoURL = photoURL;
+  
+  const user = await prisma.user.update({
+    where: { uid: req.user.uid },
+    data: updateData,
+  });
+  
+  res.json({ success: true, data: user });
 }));
 
 // Delete user account
 router.delete('/account', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  // Delete user's media items
-  const mediaQuery = await db.collection('media')
-    .where('userId', '==', req.user.uid)
-    .get();
-  
-  const batch = db.batch();
-  mediaQuery.docs.forEach(doc => {
-    batch.delete(doc.ref);
+  // Prisma will handle cascading deletes based on schema
+  await prisma.user.delete({
+    where: { uid: req.user.uid },
   });
-  
-  // Delete user profile
-  batch.delete(db.collection('users').doc(req.user.uid));
-  
-  await batch.commit();
   
   res.json({ success: true, message: 'Account deleted successfully' });
 }));

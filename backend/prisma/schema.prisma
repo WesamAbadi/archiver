@@ -1,0 +1,175 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                    String              @id @default(cuid())
+  uid                   String              @unique // Google OAuth sub claim
+  email                 String              @unique
+  displayName           String?
+  photoURL              String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  
+  // User preferences (embedded as JSON)
+  defaultVisibility     Visibility          @default(PRIVATE)
+  sortOrder             SortOrder           @default(NEWEST)
+  autoGenerateMetadata  Boolean             @default(true)
+  notificationsEnabled  Boolean             @default(true)
+  
+  // Relations
+  mediaItems            MediaItem[]
+  downloadJobs          DownloadJob[]
+  likes                 Like[]
+  comments              Comment[]
+  
+  @@map("users")
+}
+
+model MediaItem {
+  id                String              @id @default(cuid())
+  userId            String
+  originalUrl       String
+  platform          Platform
+  title             String
+  description       String?
+  visibility        Visibility          @default(PRIVATE)
+  tags              String[]
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  downloadStatus    DownloadStatus      @default(PENDING)
+  publicId          String?             @unique
+  
+  // Metadata (embedded as JSON for flexibility)
+  duration          Int?                // in seconds
+  size              BigInt
+  format            String
+  resolution        String?
+  thumbnailUrl      String?
+  originalAuthor    String?
+  originalTitle     String?
+  originalDescription String?
+  publishedAt       DateTime?
+  hashtags          String[]
+  
+  // AI Generated metadata
+  aiSummary         String?
+  aiKeywords        String[]
+  aiCaptions        String?
+  aiGeneratedAt     DateTime?
+  
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  files             MediaFile[]
+  downloadJobs      DownloadJob[]
+  likes             Like[]
+  comments          Comment[]
+  
+  @@map("media_items")
+}
+
+model MediaFile {
+  id                String              @id @default(cuid())
+  mediaItemId       String
+  filename          String
+  originalName      String
+  mimeType          String
+  size              BigInt
+  b2FileId          String
+  b2FileName        String
+  downloadUrl       String
+  isOriginal        Boolean             @default(false)
+  format            String
+  createdAt         DateTime            @default(now())
+  
+  // Relations
+  mediaItem         MediaItem           @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  
+  @@map("media_files")
+}
+
+model DownloadJob {
+  id                String              @id @default(cuid())
+  userId            String
+  url               String
+  platform          Platform
+  status            DownloadStatus      @default(PENDING)
+  progress          Int                 @default(0)
+  error             String?
+  mediaItemId       String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaItem         MediaItem?          @relation(fields: [mediaItemId], references: [id], onDelete: SetNull)
+  
+  @@map("download_jobs")
+}
+
+model Like {
+  id                String              @id @default(cuid())
+  userId            String
+  mediaItemId       String
+  createdAt         DateTime            @default(now())
+  
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaItem         MediaItem           @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, mediaItemId])
+  @@map("likes")
+}
+
+model Comment {
+  id                String              @id @default(cuid())
+  userId            String
+  mediaItemId       String
+  content           String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaItem         MediaItem           @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  
+  @@map("comments")
+}
+
+enum Platform {
+  YOUTUBE
+  SOUNDCLOUD
+  TWITTER
+  TIKTOK
+  INSTAGRAM
+  TWITCH
+  REDDIT
+  DIRECT
+}
+
+enum DownloadStatus {
+  PENDING
+  DOWNLOADING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum Visibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum SortOrder {
+  NEWEST
+  OLDEST
+  TITLE
+} 

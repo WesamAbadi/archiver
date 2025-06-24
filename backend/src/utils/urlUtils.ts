@@ -7,37 +7,37 @@ export function detectPlatform(url: string): Platform | null {
     
     // YouTube
     if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
-      return 'youtube';
+      return 'YOUTUBE';
     }
     
     // Twitter/X
     if (hostname.includes('twitter.com') || hostname.includes('x.com')) {
-      return 'twitter';
+      return 'TWITTER';
     }
     
     // TikTok
     if (hostname.includes('tiktok.com')) {
-      return 'tiktok';
+      return 'TIKTOK';
     }
     
     // SoundCloud
     if (hostname.includes('soundcloud.com')) {
-      return 'soundcloud';
+      return 'SOUNDCLOUD';
     }
     
     // Instagram
     if (hostname.includes('instagram.com')) {
-      return 'instagram';
+      return 'INSTAGRAM';
     }
     
     // Twitch
     if (hostname.includes('twitch.tv')) {
-      return 'twitch';
+      return 'TWITCH';
     }
     
     // Reddit
     if (hostname.includes('reddit.com')) {
-      return 'reddit';
+      return 'REDDIT';
     }
     
     return null;
@@ -60,17 +60,17 @@ export function extractVideoId(url: string, platform: Platform): string | null {
     const urlObj = new URL(url);
     
     switch (platform) {
-      case 'youtube':
+      case 'YOUTUBE':
         if (urlObj.hostname.includes('youtu.be')) {
           return urlObj.pathname.slice(1);
         }
         return urlObj.searchParams.get('v');
         
-      case 'twitter':
+      case 'TWITTER':
         const twitterMatch = urlObj.pathname.match(/\/status\/(\d+)/);
         return twitterMatch ? twitterMatch[1] : null;
         
-      case 'tiktok':
+      case 'TIKTOK':
         const tiktokMatch = urlObj.pathname.match(/\/video\/(\d+)/);
         return tiktokMatch ? tiktokMatch[1] : null;
         
