@@ -38,14 +38,25 @@ export class BackblazeService {
       // Create user-specific path
       const fileName = `users/${userId}/${Date.now()}-${originalName}`;
       
+      console.log(`📤 Starting B2 upload: ${originalName}`);
+      console.log(`📁 Upload path: ${fileName}`);
+      
       // Get upload URL
       const uploadUrlResponse = await this.b2.getUploadUrl({
         bucketId: this.bucketId,
       });
       
-      // Read file
+      console.log(`🔗 Got upload URL from B2`);
+      
+      // Read file and get stats
       const fileBuffer = fs.readFileSync(filePath);
       const fileStats = fs.statSync(filePath);
+      const fileSizeMB = (fileStats.size / (1024 * 1024)).toFixed(2);
+      
+      console.log(`📊 File size: ${fileSizeMB}MB (${fileStats.size} bytes)`);
+      console.log(`⬆️ Uploading to B2... 0%`);
+      
+      const startTime = Date.now();
       
       // Upload file
       const uploadResponse = await this.b2.uploadFile({
@@ -61,8 +72,17 @@ export class BackblazeService {
         },
       });
       
+      const uploadTime = ((Date.now() - startTime) / 1000).toFixed(1);
+      const uploadSpeedMBps = (fileStats.size / (1024 * 1024) / parseFloat(uploadTime)).toFixed(2);
+      
+      console.log(`✅ B2 upload completed: 100%`);
+      console.log(`⚡ Upload speed: ${uploadSpeedMBps} MB/s (${uploadTime}s total)`);
+      console.log(`🆔 File ID: ${uploadResponse.data.fileId}`);
+      
       // Generate download URL
+      console.log(`🔗 Generating download URL...`);
       const downloadUrl = await this.getDownloadUrl(fileName);
+      console.log(`✅ Download URL ready: ${downloadUrl.substring(0, 50)}...`);
       
       return {
         fileId: uploadResponse.data.fileId,
@@ -72,6 +92,7 @@ export class BackblazeService {
       };
       
     } catch (error) {
+      console.error(`❌ B2 upload failed: ${(error as Error).message}`);
       throw createError(`Failed to upload file to B2: ${(error as Error).message}`, 500);
     }
   }

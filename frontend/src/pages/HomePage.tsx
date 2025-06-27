@@ -1,171 +1,212 @@
-import React, { useState } from 'react'
-import { useQuery } from 'react-query'
-import { publicAPI } from '../lib/api'
-import { TrendingBanner } from '../components/TrendingBanner'
-import { MediaCard } from '../components/MediaCard'
-import { MediaFilters } from '../components/MediaFilters'
-import { Loader2, Zap, Star, Trophy } from 'lucide-react'
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import { Link } from 'react-router-dom';
+import axios from 'axios';
 
-export function HomePage() {
-  const [selectedType, setSelectedType] = useState<'all' | 'video' | 'audio' | 'image'>('all')
+interface MediaItem {
+  id: string;
+  title: string;
+  thumbnailUrl?: string;
+  duration?: number;
+  viewCount: number;
+  createdAt: string;
+  user: {
+    displayName: string;
+    photoURL?: string;
+  };
+}
 
-  // Get trending content
-  const { data: trendingData } = useQuery(
-    'trending',
-    () => publicAPI.getTrending({ limit: 10 }),
-    {
-      staleTime: 5 * 60 * 1000, // 5 minutes
+export default function HomePage() {
+  const { user } = useAuth();
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all');
+
+  useEffect(() => {
+    fetchMediaItems();
+  }, [filter]);
+
+  const fetchMediaItems = async () => {
+    try {
+      const response = await axios.get('/api/media/public', {
+        params: { filter }
+      });
+      setMediaItems(response.data.data);
+    } catch (error) {
+      console.error('Error fetching media:', error);
+    } finally {
+      setLoading(false);
     }
-  )
+  };
 
-  // Get main feed content
-  const { data: feedData, isLoading } = useQuery(
-    ['feed', selectedType],
-    () => publicAPI.getFeed({ page: 1, limit: 20, type: selectedType }),
-    {
-      staleTime: 2 * 60 * 1000, // 2 minutes
-    }
-  )
+  const formatDuration = (seconds?: number) => {
+    if (!seconds) return '';
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-[var(--bg-primary)] flex items-center justify-center">
-        <div className="text-center">
-          <div className="relative">
-            <Loader2 className="w-12 h-12 animate-spin text-[var(--accent-blue)] mx-auto mb-4" />
-            <div className="absolute inset-0 w-12 h-12 border-2 border-[var(--accent-purple)]/20 rounded-full animate-ping mx-auto"></div>
-          </div>
-          <h2 className="text-xl font-bold text-[var(--text-primary)] mb-2">Loading ArchiveDrop</h2>
-          <p className="text-[var(--text-secondary)]">Discovering amazing content...</p>
-        </div>
-      </div>
-    )
-  }
+  const formatViewCount = (count: number) => {
+    if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M views`;
+    if (count >= 1000) return `${(count / 1000).toFixed(1)}K views`;
+    return `${count} views`;
+  };
+
+  const formatDate = (date: string) => {
+    const now = new Date();
+    const then = new Date(date);
+    const diff = now.getTime() - then.getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    
+    if (days === 0) return 'Today';
+    if (days === 1) return '1 day ago';
+    if (days < 30) return `${days} days ago`;
+    if (days < 365) return `${Math.floor(days / 30)} months ago`;
+    return `${Math.floor(days / 365)} years ago`;
+  };
 
   return (
-    <div className="min-h-screen bg-[var(--bg-primary)]">
-      {/* Hero Section */}
-      <div className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-[var(--accent-blue)]/10 via-[var(--accent-purple)]/5 to-transparent"></div>
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-16">
-          {/* Header */}
-          <div className="text-center mb-12">
-            <div className="flex items-center justify-center space-x-2 mb-4">
-              <Zap className="w-8 h-8 text-[var(--accent-blue)]" />
-              <h1 className="text-4xl md:text-6xl font-bold text-gradient">
-                ArchiveDrop
-              </h1>
-              <Star className="w-6 h-6 text-[var(--accent-purple)] animate-pulse" />
-            </div>
-            <p className="text-xl text-[var(--text-secondary)] max-w-2xl mx-auto">
-              Discover, archive, and share content from across the web. 
-              <span className="text-[var(--accent-blue)] font-semibold"> Your digital vault awaits.</span>
-            </p>
-          </div>
-
-          {/* Quick Stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <div className="card-gaming text-center p-4">
-              <div className="text-2xl font-bold text-[var(--accent-blue)] mb-1">2.4k+</div>
-              <div className="text-sm text-[var(--text-secondary)]">Videos</div>
-            </div>
-            <div className="card-gaming text-center p-4">
-              <div className="text-2xl font-bold text-[var(--accent-purple)] mb-1">1.8k+</div>
-              <div className="text-sm text-[var(--text-secondary)]">Audio</div>
-            </div>
-            <div className="card-gaming text-center p-4">
-              <div className="text-2xl font-bold text-[var(--accent-green)] mb-1">892+</div>
-              <div className="text-sm text-[var(--text-secondary)]">Images</div>
-            </div>
-            <div className="card-gaming text-center p-4">
-              <div className="text-2xl font-bold text-[var(--accent-red)] mb-1">5.1k+</div>
-              <div className="text-sm text-[var(--text-secondary)]">Total</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
-        {/* Trending Section */}
-        {trendingData?.data?.data && Array.isArray(trendingData.data.data) && trendingData.data.data.length > 0 && (
-          <div className="mb-12">
-            <div className="flex items-center space-x-2 mb-6">
-              <Trophy className="w-6 h-6 text-[var(--accent-orange)]" />
-              <h2 className="text-2xl font-bold text-[var(--text-primary)]">Trending Right Now</h2>
-              <div className="bg-[var(--accent-orange)]/20 text-[var(--accent-orange)] px-2 py-1 rounded-full text-sm font-medium">
-                🔥 Hot
-              </div>
-            </div>
-            <TrendingBanner items={trendingData.data.data} />
-          </div>
-        )}
-
-        {/* Content Filters */}
+    <div className="min-h-screen bg-gray-900">
+      <div className="max-w-[2200px] mx-auto px-6 py-8">
+        {/* Welcome Section */}
         <div className="mb-8">
-          <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-6">Discover Content</h2>
-          <MediaFilters
-            activeFilter={selectedType}
-            onFilterChange={setSelectedType}
-          />
-        </div>
-
-        {/* Content Grid */}
-        {feedData?.data?.data ? (
-          <>
-            {feedData.data.data.items && feedData.data.data.items.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {feedData.data.data.items.map((item) => (
-                  <MediaCard
-                    key={item.id}
-                    item={item}
-                    variant="gaming"
-                    showUploader={true}
-                    showEngagement={true}
-                  />
-                ))}
+          <h1 className="text-4xl font-bold text-white mb-2">
+            Welcome to your newest and best
+          </h1>
+          <h1 className="text-4xl font-bold text-white mb-6">
+            streaming platform!
+          </h1>
+          
+          {/* Search Bar */}
+          <div className="relative max-w-2xl">
+            <div className="flex items-center">
+              <div className="relative flex-1">
+                <svg className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  type="text"
+                  placeholder="Search"
+                  className="w-full pl-12 pr-4 py-3 bg-gray-800 border border-gray-700 rounded-l-lg text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
+                />
               </div>
-            ) : (
-              <div className="text-center py-16">
-                <div className="card-gaming p-8 max-w-md mx-auto">
-                  <div className="text-6xl mb-4">🎮</div>
-                  <h3 className="text-xl font-bold text-[var(--text-primary)] mb-2">
-                    No Content Yet
-                  </h3>
-                  <p className="text-[var(--text-secondary)] mb-4">
-                    Be the first to upload {selectedType === 'all' ? 'content' : selectedType} to ArchiveDrop!
-                  </p>
-                  <div className="text-sm text-[var(--text-muted)]">
-                    Upload from YouTube, SoundCloud, Twitter, or direct files
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Load More */}
-            {feedData.data.data.pagination?.hasMore && (
-              <div className="text-center mt-12">
-                <button className="btn btn-secondary">
-                  <Loader2 className="w-4 h-4 mr-2" />
-                  Load More Content
+              <div className="flex items-center gap-2">
+                <button className="px-4 py-3 bg-gray-800 border border-gray-700 border-l-0 text-gray-400 hover:text-white transition-colors">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.414A1 1 0 013 6.586V4z" />
+                  </svg>
+                  Filter
                 </button>
+                <span className="px-3 py-1 bg-blue-600 text-white text-sm rounded-full">CS:GO</span>
+                <span className="px-3 py-1 bg-teal-600 text-white text-sm rounded-full">FiveM</span>
               </div>
-            )}
-          </>
-        ) : (
-          <div className="text-center py-16">
-            <div className="card-gaming p-8 max-w-md mx-auto">
-              <Loader2 className="w-8 h-8 animate-spin text-[var(--accent-blue)] mx-auto mb-4" />
-              <h3 className="text-xl font-bold text-[var(--text-primary)] mb-2">
-                Loading Content
-              </h3>
-              <p className="text-[var(--text-secondary)]">
-                Fetching the latest uploads...
-              </p>
             </div>
           </div>
-        )}
+        </div>
+
+        {/* Filter Pills */}
+        <div className="flex gap-3 mb-8 overflow-x-auto pb-2">
+          {['all', 'music', 'gaming', 'news', 'education', 'entertainment'].map((category) => (
+            <button
+              key={category}
+              onClick={() => setFilter(category)}
+              className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
+                filter === category
+                  ? 'bg-white text-gray-900'
+                  : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+              }`}
+            >
+              {category.charAt(0).toUpperCase() + category.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        {/* Discover Section */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-bold text-white mb-6">Discover</h2>
+          
+          {loading ? (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              {[...Array(10)].map((_, i) => (
+                <div key={i} className="animate-pulse">
+                  <div className="bg-gray-800 aspect-video rounded-2xl mb-3"></div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              {mediaItems.slice(0, 5).map((item) => (
+                <Link
+                  key={item.id}
+                  to={`/watch/${item.id}`}
+                  className="group cursor-pointer"
+                >
+                  <div className="relative aspect-video bg-gray-800 rounded-2xl overflow-hidden hover:scale-105 transition-transform duration-200">
+                    {item.thumbnailUrl ? (
+                      <img
+                        src={item.thumbnailUrl}
+                        alt={item.title}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-600 to-purple-600">
+                        <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                          <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+                        </svg>
+                      </div>
+                    )}
+                    {item.duration && (
+                      <span className="absolute bottom-2 right-2 bg-black bg-opacity-80 text-white text-xs px-2 py-1 rounded">
+                        {formatDuration(item.duration)}
+                      </span>
+                    )}
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Category Sections */}
+        {['Counter Strike Global Offensive', 'FiveM - GTA V'].map((category, index) => (
+          <div key={category} className="mb-12">
+            <h2 className="text-2xl font-bold text-white mb-6">{category}</h2>
+            
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              {mediaItems.slice(index * 5, (index + 1) * 5).map((item) => (
+                <Link
+                  key={item.id}
+                  to={`/watch/${item.id}`}
+                  className="group cursor-pointer"
+                >
+                  <div className="relative aspect-video bg-gray-800 rounded-2xl overflow-hidden hover:scale-105 transition-transform duration-200">
+                    {item.thumbnailUrl ? (
+                      <img
+                        src={item.thumbnailUrl}
+                        alt={item.title}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-600 to-purple-600">
+                        <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                          <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+                        </svg>
+                      </div>
+                    )}
+                    {item.duration && (
+                      <span className="absolute bottom-2 right-2 bg-black bg-opacity-80 text-white text-xs px-2 py-1 rounded">
+                        {formatDuration(item.duration)}
+                      </span>
+                    )}
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
-  )
+  );
 } 

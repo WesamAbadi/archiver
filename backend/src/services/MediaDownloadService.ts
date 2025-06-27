@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { MediaItem, DownloadJob, Platform, DownloadStatus, Visibility } from '../types';
 import { BackblazeService } from './BackblazeService';
 import { GeminiService } from './GeminiService';
+import { CaptionService } from './CaptionService';
 import { createError } from '../middleware/errorHandler';
 import prisma from '../lib/database';
 import * as path from 'path';
@@ -16,6 +17,7 @@ import { spawn } from 'child_process';
 export class MediaDownloadService {
   private backblazeService = new BackblazeService();
   private geminiService = new GeminiService();
+  private captionService = new CaptionService();
   private io?: any; // Socket.IO instance for progress updates
   private useSoundCloudAlternative = process.env.USE_SOUNDCLOUD_ALTERNATIVE === 'true';
 
@@ -145,7 +147,6 @@ export class MediaDownloadService {
         // AI generated metadata
         aiSummary: aiMetadata?.summary,
         aiKeywords: aiMetadata?.keywords || [],
-        aiCaptions: aiMetadata?.captions,
         aiGeneratedAt: aiMetadata ? new Date() : undefined,
       };
 
@@ -172,6 +173,14 @@ export class MediaDownloadService {
           format: downloadResult.format,
         },
       });
+      
+      if (downloadResult.mimeType.includes('video') || downloadResult.mimeType.includes('audio')) {
+        try {
+          await this.captionService.generateCaptions(mediaItem.id, downloadResult.filePath);
+        } catch (error) {
+          console.error('Caption generation failed:', error);
+        }
+      }
       
       // Clean up temporary file
       if (fs.existsSync(downloadResult.filePath)) {
@@ -1069,25 +1078,32 @@ export class MediaDownloadService {
     description?: string;
     visibility: Visibility;
     tags: string[];
-  }): Promise<MediaItem> {
+  }): Promise<{ jobId: string; mediaItem: MediaItem }> {
+    const jobId = uuidv4(); // Generate job ID for progress tracking
+    
     try {
-      // Ensure user exists and get their database ID
+      // Emit initial progress
+      this.emitProgress(params.userId, jobId, 'PENDING', 0, 'Starting file upload...');
+      
       const dbUserId = await this.ensureUserExists(params.userId);
       
-      // Upload to Backblaze B2
+      this.emitProgress(params.userId, jobId, 'PROCESSING', 20, 'Uploading to cloud storage...');
+      
       const uploadResult = await this.backblazeService.uploadFile(
         params.file.path,
         params.file.originalname,
-        params.userId // Still use OAuth ID for file organization
+        params.userId
       );
       
-      // Generate AI metadata
+      this.emitProgress(params.userId, jobId, 'PROCESSING', 60, 'Generating AI metadata...');
+      
       const aiMetadata = await this.geminiService.generateMetadataFromFile(params.file.path);
       
-      // Create media item
+      this.emitProgress(params.userId, jobId, 'PROCESSING', 80, 'Saving to database...');
+      
       const mediaItemData = {
         id: uuidv4(),
-        userId: dbUserId, // Use database user ID, not OAuth UID
+        userId: dbUserId,
         originalUrl: 'direct-upload',
         platform: 'DIRECT' as Platform,
         title: params.title,
@@ -1096,13 +1112,10 @@ export class MediaDownloadService {
         tags: params.tags,
         downloadStatus: 'COMPLETED' as DownloadStatus,
         publicId: params.visibility === 'PUBLIC' ? uuidv4() : undefined,
-        // File metadata
         size: BigInt(params.file.size),
         format: path.extname(params.file.originalname).slice(1),
-        // AI generated
         aiSummary: aiMetadata?.summary,
         aiKeywords: aiMetadata?.keywords || [],
-        aiCaptions: aiMetadata?.captions,
         aiGeneratedAt: aiMetadata ? new Date() : undefined,
       };
 
@@ -1113,7 +1126,6 @@ export class MediaDownloadService {
         },
       });
 
-      // Create media file
       await prisma.mediaFile.create({
         data: {
           id: uuidv4(),
@@ -1130,15 +1142,30 @@ export class MediaDownloadService {
         },
       });
       
-      // Clean up temporary file
+      this.emitProgress(params.userId, jobId, 'PROCESSING', 90, 'Generating captions...');
+      
+      if (params.file.mimetype.includes('video') || params.file.mimetype.includes('audio')) {
+        try {
+          await this.captionService.generateCaptions(mediaItem.id, params.file.path);
+        } catch (error) {
+          console.error('Caption generation failed:', error);
+        }
+      }
+      
       if (fs.existsSync(params.file.path)) {
         fs.unlinkSync(params.file.path);
       }
       
-      // Return serialized media item (converts BigInt to string)
-      return this.serializeMediaItem(mediaItem);
+      const serializedMediaItem = this.serializeMediaItem(mediaItem);
+      
+      // Emit completion progress
+      this.emitProgress(params.userId, jobId, 'COMPLETED', 100, 'Upload completed successfully!', serializedMediaItem);
+      
+      return { jobId, mediaItem: serializedMediaItem };
     } catch (error) {
-      // Clean up temporary file on error
+      // Emit error progress
+      this.emitProgress(params.userId, jobId, 'FAILED', 0, (error as Error).message);
+      
       if (fs.existsSync(params.file.path)) {
         fs.unlinkSync(params.file.path);
       }

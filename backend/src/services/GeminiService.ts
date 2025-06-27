@@ -1,12 +1,14 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import * as fs from 'fs';
 import { createError } from '../middleware/errorHandler';
 
 export class GeminiService {
-  private genAI: GoogleGenerativeAI;
+  private client: GoogleGenAI;
   
   constructor() {
-    this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+    this.client = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY!
+    });
   }
 
   async generateMetadataFromFile(filePath: string): Promise<{
@@ -16,8 +18,6 @@ export class GeminiService {
     generatedAt: Date;
   }> {
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-pro-vision' });
-      
       // For now, return basic AI metadata structure
       // In a real implementation, you would analyze the file content
       return {
@@ -45,8 +45,6 @@ export class GeminiService {
   }> {
     try {
       // In a real implementation, you would fetch the media item and analyze it
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
-      
       // For now, return placeholder AI metadata
       return {
         summary: 'AI-generated summary based on media content',
@@ -65,8 +63,6 @@ export class GeminiService {
     summary: string;
   }> {
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
-      
       const prompt = `Analyze the following text and provide:
 1. Sentiment (positive/negative/neutral)
 2. Main topics (as an array)
@@ -76,12 +72,33 @@ Text: "${text}"
 
 Respond in JSON format with keys: sentiment, topics, summary`;
       
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const analysisText = response.text();
+      const result = await this.client.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'object',
+            properties: {
+              sentiment: {
+                type: 'string',
+                enum: ['positive', 'negative', 'neutral']
+              },
+              topics: {
+                type: 'array',
+                items: { type: 'string' }
+              },
+              summary: {
+                type: 'string'
+              }
+            },
+            required: ['sentiment', 'topics', 'summary']
+          }
+        }
+      });
       
       try {
-        return JSON.parse(analysisText);
+        return JSON.parse(result.text);
       } catch {
         // Fallback if JSON parsing fails
         return {

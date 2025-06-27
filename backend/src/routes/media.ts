@@ -1,22 +1,130 @@
 import { Router } from 'express';
 import multer from 'multer';
+import axios from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { MediaDownloadService } from '../services/MediaDownloadService';
 import { GeminiService } from '../services/GeminiService';
 import { BackblazeService } from '../services/BackblazeService';
+import { CaptionService } from '../services/CaptionService';
+import { AnalyticsService } from '../services/AnalyticsService';
 import { detectPlatform, validateUrl } from '../utils/urlUtils';
 import { Visibility, Platform } from '../types';
 import prisma from '../lib/database';
 
 const router: Router = Router();
 const upload = multer({ 
-  dest: 'uploads/',
+  storage: multer.diskStorage({
+    destination: 'uploads/',
+    filename: (req, file, cb) => {
+      // Preserve the original file extension
+      const ext = path.extname(file.originalname);
+      const filename = `${Date.now()}-${Math.round(Math.random() * 1E9)}${ext}`;
+      cb(null, filename);
+    }
+  }),
   limits: { fileSize: parseInt(process.env.MAX_FILE_SIZE || '100000000') }
 });
 
+// Helper function to ensure user exists and get their database ID
+async function ensureUserExists(userUid: string, email?: string, displayName?: string): Promise<string> {
+  let user = await prisma.user.findUnique({
+    where: { uid: userUid }
+  });
+
+  if (!user) {
+    // If user doesn't exist, create them
+    user = await prisma.user.create({
+      data: {
+        uid: userUid,
+        email: email || `${userUid}@temp.example.com`,
+        displayName: displayName || 'User'
+      }
+    });
+    console.log('Created new user in database:', user.id);
+  }
+
+  return user.id;
+}
+
 const geminiService = new GeminiService();
 const backblazeService = new BackblazeService();
+const captionService = new CaptionService();
+const analyticsService = new AnalyticsService();
+
+// Get public media items
+router.get('/public', asyncHandler(async (req, res) => {
+  const { filter = 'all', page = '1', limit = '20' } = req.query;
+  
+  const where: any = {
+    visibility: 'PUBLIC'
+  };
+  
+  if (filter !== 'all') {
+    where.tags = {
+      has: filter
+    };
+  }
+  
+  const mediaItems = await prisma.mediaItem.findMany({
+    where,
+    include: {
+      user: {
+        select: {
+          displayName: true,
+          photoURL: true
+        }
+      },
+      files: true
+    },
+    orderBy: { createdAt: 'desc' },
+    skip: (parseInt(page as string) - 1) * parseInt(limit as string),
+    take: parseInt(limit as string)
+  });
+  
+  // Serialize BigInt values
+  const serializedItems = mediaItems.map(item => ({
+    ...item,
+    size: item.size ? item.size.toString() : null,
+    files: item.files.map(file => ({
+      ...file,
+      size: file.size ? file.size.toString() : null
+    }))
+  }));
+  
+  res.json({ success: true, data: serializedItems });
+}));
+
+// Get user's media items
+router.get('/', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const mediaDownloadService = new MediaDownloadService();
+  
+  // Ensure user exists and get their database ID
+  const dbUserId = await ensureUserExists(req.user.uid, req.user.email, req.user.displayName);
+  
+  const mediaItems = await prisma.mediaItem.findMany({
+    where: { userId: dbUserId },
+    include: {
+      files: true,
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+  
+  // Serialize BigInt values
+  const serializedItems = mediaItems.map(item => ({
+    ...item,
+    size: item.size ? item.size.toString() : null,
+    files: item.files.map(file => ({
+      ...file,
+      size: file.size ? file.size.toString() : null
+    }))
+  }));
+  
+  res.json({ success: true, data: serializedItems });
+}));
 
 // Submit a URL for immediate download and archiving
 router.post('/submit', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
@@ -67,10 +175,12 @@ router.post('/upload', authenticateToken, upload.single('file'), asyncHandler(as
   
   const { title, description, visibility = 'PRIVATE', tags = [] } = req.body;
   
-  const mediaDownloadService = new MediaDownloadService();
+  // Get Socket.IO instance from app
+  const io = req.app.get('io');
+  const mediaDownloadService = new MediaDownloadService(io);
   
   // Process and upload file
-  const mediaItem = await mediaDownloadService.processDirectUpload({
+  const result = await mediaDownloadService.processDirectUpload({
     file: req.file,
     userId: req.user.uid,
     title,
@@ -79,7 +189,14 @@ router.post('/upload', authenticateToken, upload.single('file'), asyncHandler(as
     tags: JSON.parse(tags || '[]'),
   });
   
-  res.json({ success: true, data: mediaItem });
+  res.json({ 
+    success: true, 
+    data: {
+      jobId: result.jobId,
+      mediaItem: result.mediaItem
+    },
+    message: 'Upload completed successfully!'
+  });
 }));
 
 // Get media item by ID
@@ -119,10 +236,13 @@ router.post('/:id/generate-metadata', authenticateToken, asyncHandler(async (req
 
 // Fix download URLs for existing media items
 router.post('/fix-urls', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  // Ensure user exists and get their database ID
+  const dbUserId = await ensureUserExists(req.user.uid, req.user.email, req.user.displayName);
+  
   // Get all media items for the user with their files
   const mediaItems = await prisma.mediaItem.findMany({
     where: {
-      userId: req.user.uid,
+      userId: dbUserId,
     },
     include: {
       files: true,
@@ -170,6 +290,135 @@ router.get('/test-cdn', authenticateToken, asyncHandler(async (req: Authenticate
       cdnDomain: process.env.CDN_URL || null
     }
   });
+}));
+
+// Get captions for media item
+router.get('/:id/captions', asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const captions = await captionService.getCaptions(req.params.id);
+  res.json({ success: true, data: captions });
+}));
+
+// Generate captions for media item
+router.post('/:id/captions/generate', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  // Ensure user exists and get their database ID
+  const dbUserId = await ensureUserExists(req.user.uid, req.user.email, req.user.displayName);
+  
+  const mediaItem = await prisma.mediaItem.findFirst({
+    where: { id: req.params.id, userId: dbUserId },
+    include: { files: true }
+  });
+  
+  if (!mediaItem || !mediaItem.files[0]) {
+    throw createError('Media item not found', 404);
+  }
+  
+  // Download the file temporarily for caption generation
+  const tempDir = os.tmpdir();
+  const tempFilePath = path.join(tempDir, `caption_${Date.now()}_${mediaItem.files[0].filename}`);
+  
+  try {
+    // Download file from B2
+    const response = await axios({
+      method: 'GET',
+      url: mediaItem.files[0].downloadUrl,
+      responseType: 'stream'
+    });
+    
+    const writer = fs.createWriteStream(tempFilePath);
+    response.data.pipe(writer);
+    
+    await new Promise<void>((resolve, reject) => {
+      writer.on('finish', () => resolve());
+      writer.on('error', (err) => reject(err));
+    });
+    
+    // Generate captions using local file
+    const caption = await captionService.generateCaptions(req.params.id, tempFilePath);
+    
+    // Clean up temp file
+    fs.unlinkSync(tempFilePath);
+    
+    res.json({ success: true, data: caption });
+  } catch (error) {
+    // Clean up temp file if it exists
+    if (fs.existsSync(tempFilePath)) {
+      fs.unlinkSync(tempFilePath);
+    }
+    throw error;
+  }
+}));
+
+// Track view
+router.post('/:id/views', asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const { watchDuration } = req.body;
+  await analyticsService.trackView(req.params.id, req.user?.uid, watchDuration);
+  res.json({ success: true });
+}));
+
+// Get view statistics
+router.get('/:id/stats', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const stats = await analyticsService.getViewStats(req.params.id);
+  res.json({ success: true, data: stats });
+}));
+
+// Toggle like
+router.post('/:id/like', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const { liked } = req.body;
+  
+  // Ensure user exists and get their database ID
+  const dbUserId = await ensureUserExists(req.user.uid, req.user.email, req.user.displayName);
+  
+  if (liked) {
+    await prisma.like.create({
+      data: {
+        userId: dbUserId,
+        mediaItemId: req.params.id
+      }
+    });
+  } else {
+    await prisma.like.deleteMany({
+      where: {
+        userId: dbUserId,
+        mediaItemId: req.params.id
+      }
+    });
+  }
+  
+  await analyticsService.updateEngagementCounts(req.params.id);
+  res.json({ success: true });
+}));
+
+// Add comment
+router.post('/:id/comments', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const { content } = req.body;
+  
+  // Ensure user exists and get their database ID
+  const dbUserId = await ensureUserExists(req.user.uid, req.user.email, req.user.displayName);
+  
+  const comment = await prisma.comment.create({
+    data: {
+      userId: dbUserId,
+      mediaItemId: req.params.id,
+      content
+    },
+    include: {
+      user: true
+    }
+  });
+  
+  await analyticsService.updateEngagementCounts(req.params.id);
+  res.json({ success: true, data: comment });
+}));
+
+// Get comments
+router.get('/:id/comments', asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const comments = await prisma.comment.findMany({
+    where: { mediaItemId: req.params.id },
+    include: { user: true },
+    orderBy: { createdAt: 'desc' }
+  });
+  
+  res.json({ success: true, data: comments });
 }));
 
 export default router; 

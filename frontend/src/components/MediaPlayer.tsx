@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, forwardRef, useImperativeHandle } from 'react';
 
 // Import Plyr CSS
 import 'plyr/dist/plyr.css';
@@ -10,23 +10,59 @@ interface MediaPlayerProps {
   poster?: string;
   autoplay?: boolean;
   className?: string;
+  onTimeUpdate?: () => void;
+  onPlay?: () => void;
+  onPause?: () => void;
 }
 
-export function MediaPlayer({ 
+export interface MediaPlayerRef {
+  currentTime: number;
+  duration: number;
+  play: () => void;
+  pause: () => void;
+  seekTo: (time: number) => void;
+}
+
+export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(({ 
   src, 
   type, 
   title, 
   poster, 
   autoplay = false, 
-  className = '' 
-}: MediaPlayerProps) {
+  className = '',
+  onTimeUpdate,
+  onPlay,
+  onPause
+}, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const mediaElementRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   
   // Keep track of cleanup functions
   const cleanupRef = useRef<(() => void) | null>(null);
+
+  // Expose methods to parent via ref
+  useImperativeHandle(ref, () => ({
+    get currentTime() {
+      return mediaElementRef.current?.currentTime || 0;
+    },
+    get duration() {
+      return mediaElementRef.current?.duration || 0;
+    },
+    play: () => {
+      mediaElementRef.current?.play();
+    },
+    pause: () => {
+      mediaElementRef.current?.pause();
+    },
+    seekTo: (time: number) => {
+      if (mediaElementRef.current) {
+        mediaElementRef.current.currentTime = time;
+      }
+    },
+  }));
 
   useEffect(() => {
     let isMounted = true;
@@ -58,11 +94,25 @@ export function MediaPlayer({
         mediaElement.crossOrigin = 'anonymous';
         mediaElement.preload = 'metadata';
         
+        // Store reference to media element
+        mediaElementRef.current = mediaElement;
+        
         if (type === 'video') {
           (mediaElement as HTMLVideoElement).playsInline = true;
           if (poster) {
             (mediaElement as HTMLVideoElement).poster = poster;
           }
+        }
+
+        // Add event listeners for parent callbacks
+        if (onTimeUpdate) {
+          mediaElement.addEventListener('timeupdate', onTimeUpdate);
+        }
+        if (onPlay) {
+          mediaElement.addEventListener('play', onPlay);
+        }
+        if (onPause) {
+          mediaElement.addEventListener('pause', onPause);
         }
 
         // Create wrapper div for Plyr
@@ -162,10 +212,25 @@ export function MediaPlayer({
             console.warn('Error destroying Plyr:', e);
           }
 
+          // Clean up event listeners
+          if (mediaElementRef.current) {
+            if (onTimeUpdate) {
+              mediaElementRef.current.removeEventListener('timeupdate', onTimeUpdate);
+            }
+            if (onPlay) {
+              mediaElementRef.current.removeEventListener('play', onPlay);
+            }
+            if (onPause) {
+              mediaElementRef.current.removeEventListener('pause', onPause);
+            }
+          }
+
           // Clean up DOM
           if (container && container.parentNode) {
             container.innerHTML = '';
           }
+
+          mediaElementRef.current = null;
         };
 
         if (!hlsInstance) {
@@ -191,7 +256,7 @@ export function MediaPlayer({
         cleanupRef.current = null;
       }
     };
-  }, [src, type, poster, autoplay]);
+  }, [src, type, poster, autoplay, onTimeUpdate, onPlay, onPause]);
 
   if (error) {
     return (
@@ -209,9 +274,9 @@ export function MediaPlayer({
     <div className={`relative ${className}`}>
       {/* Audio Player - SoundCloud style */}
       {type === 'audio' && (
-        <div className="w-full bg-gradient-to-br from-[var(--bg-secondary)] to-[var(--bg-tertiary)] rounded-xl overflow-hidden">
+        <div className="w-full bg-gray-800 rounded-xl overflow-hidden">
           {/* Audio Waveform Visual */}
-          <div className="relative h-32 bg-gradient-to-r from-[var(--accent-blue)]/10 to-[var(--accent-purple)]/10 flex items-center justify-center">
+          <div className="relative h-32 bg-gradient-to-r from-blue-600/10 to-purple-600/10 flex items-center justify-center">
             <div className="absolute inset-0 bg-[linear-gradient(90deg,transparent_0%,rgba(0,212,255,0.1)_50%,transparent_100%)] animate-pulse"></div>
             <div className="text-4xl">🎵</div>
             {title && (
@@ -243,13 +308,15 @@ export function MediaPlayer({
       {isLoading && (
         <div className="absolute inset-0 bg-black/80 rounded-xl flex items-center justify-center z-20">
           <div className="text-center">
-            <div className="w-12 h-12 border-4 border-[var(--accent-blue)]/20 border-t-[var(--accent-blue)] rounded-full animate-spin mx-auto mb-4"></div>
+            <div className="w-12 h-12 border-4 border-blue-600/20 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
             <p className="text-white font-medium">Loading player...</p>
           </div>
         </div>
       )}
     </div>
   );
-}
+});
+
+MediaPlayer.displayName = 'MediaPlayer';
 
 export default MediaPlayer; 

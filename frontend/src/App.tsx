@@ -1,63 +1,58 @@
-import React from 'react'
-import { Routes, Route } from 'react-router-dom'
-import { AuthProvider } from './contexts/AuthContext'
-import { ProtectedRoute } from './components/ProtectedRoute'
-import { Sidebar } from './components/Sidebar'
-import { MobileBottomNav } from './components/MobileBottomNav'
-import { HomePage } from './pages/HomePage'
-import { WatchPage } from './pages/WatchPage'
-import { TrendingPage } from './pages/TrendingPage'
-import { LoginPage } from './pages/LoginPage'
-import { DashboardPage } from './pages/DashboardPage'
-import { ArchivePage } from './pages/ArchivePage'
-import { SettingsPage } from './pages/SettingsPage'
-import PlyrTest from './components/PlyrTest'
+import React from 'react';
+import { Routes, Route } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from 'react-query';
+import { AuthProvider } from './contexts/AuthContext';
+import HomePage from './pages/HomePage';
+import { LoginPage } from './pages/LoginPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { WatchPage } from './pages/WatchPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import Navbar from './components/Navbar';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+      staleTime: 5 * 60 * 1000,
+    },
+  },
+});
 
 function App() {
   return (
-    <AuthProvider>
-      <div className="min-h-screen bg-[var(--bg-primary)]">
-        {/* Desktop Sidebar */}
-        <Sidebar />
-        
-        {/* Main Content */}
-        <div className="lg:ml-64">
-          <div className="pb-16 lg:pb-0">
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <div className="min-h-screen bg-gray-900">
+          <Navbar />
+          <div className="pt-14">
             <Routes>
-              {/* Public Routes */}
+              <Route path="/login" element={<LoginPage />} />
               <Route path="/" element={<HomePage />} />
               <Route path="/watch/:id" element={<WatchPage />} />
-              <Route path="/trending" element={<TrendingPage />} />
-              <Route path="/login" element={<LoginPage />} />
-              
-              {/* Protected Routes */}
-              <Route 
-                path="/dashboard" 
+              <Route
+                path="/dashboard"
                 element={
                   <ProtectedRoute>
                     <DashboardPage />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route path="/archive" element={
-                <ProtectedRoute>
-                  <ArchivePage />
-                </ProtectedRoute>
-              } />
-              <Route path="/settings" element={
-                <ProtectedRoute>
-                  <SettingsPage />
-                </ProtectedRoute>
-              } />
+              <Route
+                path="/settings"
+                element={
+                  <ProtectedRoute>
+                    <SettingsPage />
+                  </ProtectedRoute>
+                }
+              />
             </Routes>
           </div>
         </div>
-
-        {/* Mobile Bottom Navigation */}
-        <MobileBottomNav />
-      </div>
-    </AuthProvider>
-  )
+      </AuthProvider>
+    </QueryClientProvider>
+  );
 }
 
-export default App 
+export default App; 
