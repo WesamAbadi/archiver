@@ -1,3 +1,4 @@
+@import 'plyr/dist/plyr.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -489,6 +490,100 @@
     opacity: 0;
     transform: translateX(10px);
     transition: all 0.2s ease;
+}
+
+
+/* Plyr custom styling for dark theme */
+
+.plyr {
+    --plyr-color-main: var(--accent-blue);
+    --plyr-video-background: var(--bg-secondary);
+    --plyr-audio-controls-background: var(--bg-secondary);
+    --plyr-audio-control-color: var(--text-primary);
+    --plyr-audio-control-background-hover: var(--bg-hover);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.plyr--full-ui input[type=range] {
+    color: var(--accent-blue);
+}
+
+.plyr__control--overlaid {
+    background: var(--accent-blue);
+    color: white;
+    border: none;
+}
+
+.plyr__control:hover,
+.plyr__control[aria-expanded=true] {
+    background: var(--accent-blue);
+    color: white;
+}
+
+.plyr__menu__container .plyr__control[role=menuitemradio][aria-checked=true]::before {
+    background: var(--accent-blue);
+}
+
+.plyr--audio .plyr__controls {
+    background: linear-gradient(145deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
+    color: var(--text-primary);
+    padding: 1rem 1.5rem;
+    border-radius: 0 0 12px 12px;
+    border-top: 1px solid var(--border-primary);
+    backdrop-filter: blur(10px);
+}
+
+.plyr--audio {
+    background: transparent;
+    border: none;
+    border-radius: 12px;
+    overflow: visible;
+}
+
+.plyr--audio .plyr__control {
+    color: var(--text-primary);
+}
+
+.plyr--audio .plyr__control:hover {
+    background: var(--accent-blue);
+    color: white;
+}
+
+.plyr--audio .plyr__control svg {
+    fill: currentColor;
+}
+
+.plyr--audio .plyr__control--overlaid {
+    background: var(--accent-blue);
+    color: white;
+    border: none;
+    box-shadow: 0 4px 16px rgba(0, 212, 255, 0.3);
+}
+
+.plyr--audio .plyr__progress input[type=range] {
+    color: var(--accent-blue);
+}
+
+.plyr--audio .plyr__volume input[type=range] {
+    color: var(--accent-blue);
+}
+
+.plyr__progress input[type=range],
+.plyr__volume input[type=range] {
+    color: var(--accent-blue);
+}
+
+.plyr__control svg {
+    fill: currentColor;
+}
+
+.plyr__tooltip {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-primary);
+    border-radius: 6px;
+    font-size: 0.75rem;
 }
 
 

@@ -77,6 +77,9 @@ importers:
       soundcloud-downloader:
         specifier: ^1.0.0
         version: 1.0.0
+      soundcloud.ts:
+        specifier: ^0.6.5
+        version: 0.6.5
       twitter-api-v2:
         specifier: ^1.15.2
         version: 1.23.2
@@ -2256,6 +2259,9 @@ packages:
 
   soundcloud-key-fetch@1.0.13:
     resolution: {integrity: sha512-X1ketDIELpXOj2zuNNlTEtEy8y9Zu5R9m2lzkocXkG0GmUMht2ZypS8mtEDAWtEeqnEqkkLxipOsly+qU1gb6Q==}
+
+  soundcloud.ts@0.6.5:
+    resolution: {integrity: sha512-X5juSiNpFHgmkytlULueAdJSTkY1KjcotOWiT++3IbihDVEjduMe/fs/PDx4X3uXt6tPmUyWjove510ZtXAWqA==}
 
   source-map-support@0.5.13:
     resolution: {integrity: sha512-SHSKFHadjVA5oR4PPqhtAVdcBWwRYVd6g6cAXnIbRiIwc2EhPrTuKUBdSLvlEKyIP3GCf89fltvcZiP9MMFA1w==}
@@ -5085,6 +5091,8 @@ snapshots:
       - debug
 
   soundcloud-key-fetch@1.0.13: {}
+
+  soundcloud.ts@0.6.5: {}
 
   source-map-support@0.5.13:
     dependencies:

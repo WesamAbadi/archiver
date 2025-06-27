@@ -11,6 +11,7 @@ import { LoginPage } from './pages/LoginPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ArchivePage } from './pages/ArchivePage'
 import { SettingsPage } from './pages/SettingsPage'
+import PlyrTest from './components/PlyrTest'
 
 function App() {
   return (

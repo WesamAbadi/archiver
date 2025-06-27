@@ -3,6 +3,8 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from 'react-query'
 import { publicAPI } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
+import MediaPlayer from '../components/MediaPlayer'
+import ErrorBoundary from '../components/ErrorBoundary'
 import { 
   Heart, 
   MessageCircle, 
@@ -14,14 +16,9 @@ import {
   ExternalLink,
   Send,
   Loader2,
-  Play,
-  Pause,
-  Volume2,
-  VolumeX,
-  Maximize,
-  Clock,
-  FileText,
   Globe,
+  FileText,
+  Clock,
   ArrowLeft
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
@@ -33,87 +30,14 @@ export function WatchPage() {
   const queryClient = useQueryClient()
   const [comment, setComment] = useState('')
   const [showFullDescription, setShowFullDescription] = useState(false)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [isMuted, setIsMuted] = useState(false)
-  const [volume, setVolume] = useState(0.8)
-  const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(0)
-  const [isBuffering, setIsBuffering] = useState(false)
-  const [isMediaLoaded, setIsMediaLoaded] = useState(false)
-  const [showVolumeSlider, setShowVolumeSlider] = useState(false)
-  const audioRef = useRef<HTMLAudioElement>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const volumeRef = useRef<HTMLDivElement>(null)
 
-  // Close volume slider when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (volumeRef.current && !volumeRef.current.contains(event.target as Node)) {
-        setShowVolumeSlider(false)
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [])
-
-  // Initialize volume when component mounts
-  useEffect(() => {
-    const mediaElement = audioRef.current || videoRef.current
-    if (mediaElement) {
-      mediaElement.volume = volume
-    }
-  }, [volume])
-
-  // Keyboard controls
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Only handle keys when not typing in an input
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
-        return
-      }
-
-      switch (event.code) {
-        case 'Space':
-          event.preventDefault()
-          togglePlay()
-          break
-        case 'ArrowUp':
-          event.preventDefault()
-          setVolume(prev => Math.min(1, prev + 0.1))
-          break
-        case 'ArrowDown':
-          event.preventDefault()
-          setVolume(prev => Math.max(0, prev - 0.1))
-          break
-        case 'ArrowLeft':
-          event.preventDefault()
-          const mediaElement1 = audioRef.current || videoRef.current
-          if (mediaElement1) {
-            mediaElement1.currentTime = Math.max(0, mediaElement1.currentTime - 10)
-          }
-          break
-        case 'ArrowRight':
-          event.preventDefault()
-          const mediaElement2 = audioRef.current || videoRef.current
-          if (mediaElement2) {
-            mediaElement2.currentTime = Math.min(mediaElement2.duration, mediaElement2.currentTime + 10)
-          }
-          break
-        case 'KeyM':
-          event.preventDefault()
-          toggleMute()
-          break
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [volume])
+  // Utility function for formatting time
+  const formatTime = (seconds: number) => {
+    if (isNaN(seconds)) return '0:00'
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
 
   // Get media item with comments
   const { data: mediaData, isLoading, error } = useQuery(
@@ -239,103 +163,6 @@ export function WatchPage() {
     }
   }
 
-  // Audio/Video controls
-  const togglePlay = () => {
-    const mediaElement = audioRef.current || videoRef.current
-    if (mediaElement) {
-      if (isPlaying) {
-        mediaElement.pause()
-      } else {
-        setIsBuffering(true)
-        mediaElement.play().catch((error) => {
-          console.error('Play failed:', error)
-          toast.error('Failed to play media')
-          setIsBuffering(false)
-        })
-      }
-    }
-  }
-
-  const toggleMute = () => {
-    const mediaElement = audioRef.current || videoRef.current
-    if (mediaElement) {
-      mediaElement.muted = !isMuted
-      setIsMuted(!isMuted)
-    }
-  }
-
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newVolume = parseFloat(e.target.value)
-    setVolume(newVolume)
-    const mediaElement = audioRef.current || videoRef.current
-    if (mediaElement) {
-      mediaElement.volume = newVolume
-      if (newVolume === 0) {
-        setIsMuted(true)
-        mediaElement.muted = true
-      } else if (isMuted) {
-        setIsMuted(false)
-        mediaElement.muted = false
-      }
-    }
-  }
-
-  const handleTimeUpdate = () => {
-    const mediaElement = audioRef.current || videoRef.current
-    if (mediaElement) {
-      setCurrentTime(mediaElement.currentTime)
-      setDuration(mediaElement.duration || 0)
-    }
-  }
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newTime = parseFloat(e.target.value)
-    setCurrentTime(newTime)
-    const mediaElement = audioRef.current || videoRef.current
-    if (mediaElement) {
-      mediaElement.currentTime = newTime
-    }
-  }
-
-  // Media event handlers
-  const handleLoadStart = () => {
-    setIsBuffering(true)
-    setIsMediaLoaded(false)
-  }
-
-  const handleLoadedData = () => {
-    setIsMediaLoaded(true)
-    setIsBuffering(false)
-  }
-
-  const handleWaiting = () => {
-    setIsBuffering(true)
-  }
-
-  const handleCanPlay = () => {
-    setIsBuffering(false)
-  }
-
-  const handlePlay = () => {
-    setIsPlaying(true)
-    setIsBuffering(false)
-  }
-
-  const handlePause = () => {
-    setIsPlaying(false)
-  }
-
-  const handleVolumeClick = () => {
-    setShowVolumeSlider(!showVolumeSlider)
-  }
-
-  const formatTime = (seconds: number) => {
-    if (isNaN(seconds)) return '0:00'
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
-
   if (isLoading) {
     return (
       <div className="min-h-screen bg-[var(--bg-primary)] flex items-center justify-center">
@@ -445,149 +272,16 @@ export function WatchPage() {
 
                 {/* Audio Player */}
                 {isAudio && (
-                  <div className="w-full h-full flex flex-col items-center justify-center relative">
-                    <audio
-                      ref={audioRef}
-                      src={primaryFile.downloadUrl}
-                      onTimeUpdate={handleTimeUpdate}
-                      onLoadedMetadata={handleTimeUpdate}
-                      onPlay={handlePlay}
-                      onPause={handlePause}
-                      onLoadStart={handleLoadStart}
-                      onLoadedData={handleLoadedData}
-                      onWaiting={handleWaiting}
-                      onCanPlay={handleCanPlay}
-                      className="hidden"
-                    />
-                    
-                    {/* Loading State */}
-                    {!isMediaLoaded && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-secondary)]/80 backdrop-blur-sm z-20">
-                        <div className="text-center">
-                          <div className="w-16 h-16 border-4 border-[var(--accent-blue)]/20 border-t-[var(--accent-blue)] rounded-full animate-spin mx-auto mb-4"></div>
-                          <p className="text-[var(--text-primary)] font-medium">Loading audio...</p>
-                          <p className="text-[var(--text-secondary)] text-sm">Please wait</p>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Buffering Indicator */}
-                    {isBuffering && isMediaLoaded && (
-                      <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-10">
-                        <div className="w-12 h-12 border-4 border-[var(--accent-purple)]/20 border-t-[var(--accent-purple)] rounded-full animate-spin"></div>
-                      </div>
-                    )}
-                    
-                    {/* Audio Visualization */}
-                    <div className="w-32 h-32 bg-gradient-gaming rounded-full flex items-center justify-center mb-8 shadow-gaming relative">
-                      <div className="w-24 h-24 bg-white/10 rounded-full flex items-center justify-center">
-                        <span className="text-4xl">🎵</span>
-                      </div>
-                      {isPlaying && (
-                        <div className="absolute inset-0 border-4 border-[var(--accent-blue)]/30 rounded-full animate-pulse"></div>
-                      )}
-                    </div>
-                    
-                    {/* Play Button */}
-                    <button
-                      onClick={togglePlay}
-                      disabled={!isMediaLoaded}
-                      className="w-16 h-16 bg-[var(--accent-blue)] hover:bg-[var(--accent-purple)] rounded-full flex items-center justify-center text-white transition-all shadow-gaming hover-lift mb-6 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isBuffering ? (
-                        <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      ) : isPlaying ? (
-                        <Pause className="w-8 h-8" />
-                      ) : (
-                        <Play className="w-8 h-8 ml-1" />
-                      )}
-                    </button>
-                    
-                    {/* Progress Bar */}
-                    <div className="w-full max-w-md px-8">
-                      <input
-                        type="range"
-                        min="0"
-                        max={duration || 0}
-                        value={currentTime}
-                        onChange={handleSeek}
-                        disabled={!isMediaLoaded}
-                        className="w-full h-2 bg-[var(--bg-secondary)] rounded-lg appearance-none cursor-pointer mb-4 disabled:opacity-50"
-                        style={{
-                          background: `linear-gradient(to right, var(--accent-blue) 0%, var(--accent-blue) ${(currentTime / (duration || 1)) * 100}%, var(--bg-secondary) ${(currentTime / (duration || 1)) * 100}%, var(--bg-secondary) 100%)`
-                        }}
-                      />
-                      <div className="flex justify-between text-sm text-[var(--text-secondary)]">
-                        <span className="font-mono">{formatTime(currentTime)}</span>
-                        <span className="font-mono">{formatTime(duration)}</span>
-                      </div>
-                    </div>
-                    
-                    {/* Volume Control */}
-                    <div className="absolute bottom-4 right-4 flex items-center space-x-2">
-                      <div className="relative" ref={volumeRef}>
-                        <button
-                          onClick={handleVolumeClick}
-                          className="p-2 bg-black/50 rounded-lg text-white hover:bg-black/75 transition-colors"
-                        >
-                          {isMuted || volume === 0 ? (
-                            <VolumeX className="w-4 h-4" />
-                          ) : volume < 0.5 ? (
-                            <Volume2 className="w-4 h-4" />
-                          ) : (
-                            <Volume2 className="w-4 h-4" />
-                          )}
-                        </button>
-                        
-                        {/* Volume Slider */}
-                        {showVolumeSlider && (
-                          <div className="absolute bottom-full right-0 mb-2 p-3 bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded-lg shadow-gaming">
-                            <div className="flex flex-col items-center space-y-2">
-                              <input
-                                type="range"
-                                min="0"
-                                max="1"
-                                step="0.05"
-                                value={volume}
-                                onChange={handleVolumeChange}
-                                className="w-20 h-2 bg-[var(--bg-secondary)] rounded-lg appearance-none cursor-pointer transform rotate-0"
-                                style={{
-                                  background: `linear-gradient(to right, var(--accent-blue) 0%, var(--accent-blue) ${volume * 100}%, var(--bg-secondary) ${volume * 100}%, var(--bg-secondary) 100%)`
-                                }}
-                              />
-                              <span className="text-xs text-[var(--text-secondary)] font-mono">
-                                {Math.round(volume * 100)}%
-                              </span>
-                              <button
-                                onClick={toggleMute}
-                                className="text-xs text-[var(--accent-blue)] hover:text-[var(--accent-purple)] transition-colors"
-                              >
-                                {isMuted ? 'Unmute' : 'Mute'}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Audio Info */}
-                    {isMediaLoaded && (
-                      <div className="absolute top-4 left-4 bg-black/50 backdrop-blur-sm rounded-lg px-3 py-2 text-white text-sm">
-                        <div className="flex items-center space-x-2">
-                          <div className={`w-2 h-2 rounded-full ${isPlaying ? 'bg-[var(--accent-green)] animate-pulse' : 'bg-[var(--text-muted)]'}`}></div>
-                          <span>{isPlaying ? 'Playing' : isBuffering ? 'Buffering...' : 'Paused'}</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Keyboard Shortcuts Help */}
-                    <div className="absolute bottom-4 left-4 bg-black/50 backdrop-blur-sm rounded-lg px-3 py-2 text-white text-xs">
-                      <div className="space-y-1">
-                        <div><span className="font-mono bg-white/20 px-1 rounded">Space</span> Play/Pause</div>
-                        <div><span className="font-mono bg-white/20 px-1 rounded">M</span> Mute</div>
-                        <div><span className="font-mono bg-white/20 px-1 rounded">↑↓</span> Volume</div>
-                        <div><span className="font-mono bg-white/20 px-1 rounded">←→</span> Seek ±10s</div>
-                      </div>
+                  <div className="w-full h-full flex items-center justify-center relative p-8">
+                    <div className="w-full max-w-2xl">
+                      <ErrorBoundary>
+                        <MediaPlayer
+                          src={primaryFile.downloadUrl}
+                          type="audio"
+                          title={media.title}
+                          className="w-full"
+                        />
+                      </ErrorBoundary>
                     </div>
                   </div>
                 )}
@@ -595,20 +289,14 @@ export function WatchPage() {
                 {/* Video Player */}
                 {isVideo && (
                   <div className="w-full h-full relative">
-                    <video
-                      ref={videoRef}
-                      src={primaryFile.downloadUrl}
-                      controls
-                      className="w-full h-full object-contain"
-                      onTimeUpdate={handleTimeUpdate}
-                      onLoadedMetadata={handleTimeUpdate}
-                      onPlay={handlePlay}
-                      onPause={handlePause}
-                      onLoadStart={handleLoadStart}
-                      onLoadedData={handleLoadedData}
-                      onWaiting={handleWaiting}
-                      onCanPlay={handleCanPlay}
-                    />
+                    <ErrorBoundary>
+                      <MediaPlayer
+                        src={primaryFile.downloadUrl}
+                        type="video"
+                        title={media.title}
+                        className="w-full h-full"
+                      />
+                    </ErrorBoundary>
                   </div>
                 )}
 

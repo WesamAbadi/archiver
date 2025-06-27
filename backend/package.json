@@ -15,7 +15,11 @@
         "db:studio": "prisma studio"
     },
     "nodemonConfig": {
-        "ignore": ["uploads/**/*", "dist/**/*", "node_modules/**/*"],
+        "ignore": [
+            "uploads/**/*",
+            "dist/**/*",
+            "node_modules/**/*"
+        ],
         "ext": "ts,js,json"
     },
     "dependencies": {
@@ -42,6 +46,7 @@
         "sharp": "^0.33.2",
         "socket.io": "^4.8.1",
         "soundcloud-downloader": "^1.0.0",
+        "soundcloud.ts": "^0.6.5",
         "twitter-api-v2": "^1.15.2",
         "uuid": "^9.0.1",
         "youtube-dl-exec": "^2.5.8",

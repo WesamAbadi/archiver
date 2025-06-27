@@ -78,6 +78,16 @@ export class BackblazeService {
 
   async getDownloadUrl(fileName: string): Promise<string> {
     try {
+      // Use CDN URL if available, otherwise fallback to B2 direct URL
+      const cdnUrl = process.env.CDN_URL;
+      
+      if (cdnUrl) {
+        // CDN URL format: https://lately-robust-thrush.global.ssl.fastly.net/users/...
+        // fileName format: users/102678673714259272192/1750791680514-soundcloud_1750791676915.mp3
+        return `https://${cdnUrl}/${fileName}`;
+      }
+      
+      // Fallback to original B2 URL generation
       await this.initialize();
       
       console.log('Bucket ID:', this.bucketId);

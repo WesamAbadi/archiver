@@ -135,7 +135,7 @@ router.post('/fix-urls', authenticateToken, asyncHandler(async (req: Authenticat
     if (mediaItem.files && mediaItem.files.length > 0) {
       for (const file of mediaItem.files) {
         if (file.b2FileName) {
-          // Generate new correct URL
+          // Generate new correct URL (now using CDN if CDN_URL env var is set)
           const newDownloadUrl = await backblazeService.getDownloadUrl(file.b2FileName);
           
           // Update the file record
@@ -152,7 +152,23 @@ router.post('/fix-urls', authenticateToken, asyncHandler(async (req: Authenticat
   
   res.json({ 
     success: true, 
-    message: `Fixed download URLs for ${fixedCount} media items` 
+    message: `Fixed download URLs for ${fixedCount} media items${process.env.CDN_URL ? ' (using CDN)' : ' (using direct B2 URLs)'}`
+  });
+}));
+
+// Test CDN URL generation
+router.get('/test-cdn', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const testFileName = `users/${req.user.uid}/test-file.mp3`;
+  const generatedUrl = await backblazeService.getDownloadUrl(testFileName);
+  
+  res.json({
+    success: true,
+    data: {
+      testFileName,
+      generatedUrl,
+      usingCDN: !!process.env.CDN_URL,
+      cdnDomain: process.env.CDN_URL || null
+    }
   });
 }));
 
