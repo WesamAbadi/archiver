@@ -92,6 +92,18 @@ export interface MediaItem {
   updatedAt: string
   downloadStatus: 'PENDING' | 'DOWNLOADING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
   publicId?: string
+  // Analytics fields
+  viewCount: number
+  likeCount: number
+  commentCount: number
+  // Relations
+  user?: {
+    id: string
+    displayName?: string
+    photoURL?: string
+  }
+  // Search result fields
+  caption_match?: string
 }
 
 export interface DownloadJob {
@@ -185,4 +197,25 @@ export const userAPI = {
   getProfile: () => api.get('/user/profile'),
   updateProfile: (data: any) => api.patch('/user/profile', data),
   getUsage: () => api.get('/user/usage'),
+}
+
+// Search API
+export const searchAPI = {
+  search: (params: { 
+    q: string;
+    limit?: number;
+    offset?: number;
+    includePrivate?: boolean;
+  }) => api.get<SearchResult>('/search', { params }),
+  
+  getSuggestions: (params: {
+    q: string;
+    limit?: number;
+  }) => api.get<string[]>('/search/suggestions', { params }),
+}
+
+export interface SearchResult {
+  items: MediaItem[];
+  total: number;
+  hasMore: boolean;
 } 

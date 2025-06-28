@@ -27,6 +27,7 @@ import authRoutes from './routes/auth';
 import mediaRoutes from './routes/media';
 import archiveRoutes from './routes/archive';
 import userRoutes from './routes/user';
+import searchRoutes from './routes/search';
 
 const app = express();
 const server = createServer(app);
@@ -77,6 +78,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/archive', archiveRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/search', searchRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

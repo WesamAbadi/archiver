@@ -70,6 +70,9 @@ model MediaItem {
   likeCount         Int                 @default(0)
   commentCount      Int                 @default(0)
   
+  // Search vector for full-text search
+  searchVector      Unsupported("tsvector")?
+  
   // Relations
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   files             MediaFile[]
@@ -80,6 +83,7 @@ model MediaItem {
   captions          Caption[]
   
   @@map("media_items")
+  @@index([searchVector], type: Gin)
 }
 
 model MediaFile {

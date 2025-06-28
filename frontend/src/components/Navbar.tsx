@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import { useUpload } from '../contexts/UploadContext'
+import { SearchBar } from './SearchBar'
 import UploadModal from './modals/UploadModal'
 
 export default function Navbar() {
@@ -53,78 +54,71 @@ export default function Navbar() {
             </div>
           </div>
 
+          <div className="flex-1 max-w-2xl mx-8">
+            <SearchBar />
+          </div>
+
           <div className="flex items-center gap-4">
+            {user && (
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Upload
+              </button>
+            )}
+
             {user ? (
-              <>
+              <div className="relative">
                 <button
-                  onClick={() => setShowUploadModal(true)}
-                  className="relative flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors overflow-hidden"
+                  onClick={() => setShowUserMenu(!showUserMenu)}
+                  className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors"
                 >
-                  <AnimatePresence>
-                    {isUploading && !showUploadModal ? (
-                      <motion.div
-                        initial={{ width: 0, opacity: 0 }}
-                        animate={{ width: '100%', opacity: 1 }}
-                        exit={{ width: 0, opacity: 0 }}
-                        className="absolute inset-0"
-                      >
-                        <div
-                          className={`h-full ${getProgressColor()}`}
-                          style={{ width: `${uploadProgress.progress}%` }}
-                        />
-                      </motion.div>
-                    ) : null}
-                  </AnimatePresence>
-                  
-                  <div className="relative z-10 flex items-center gap-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                    <span className="hidden sm:inline">
-                      {isUploading ? `Uploading... ${uploadProgress.progress}%` : 'Upload'}
-                    </span>
-                  </div>
+                  {user.photoURL ? (
+                    <img
+                      src={user.photoURL}
+                      alt={user.displayName || 'User'}
+                      className="w-8 h-8 rounded-full"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 bg-gray-700 rounded-full flex items-center justify-center">
+                      <span className="text-sm font-medium">
+                        {user.displayName?.[0] || 'U'}
+                      </span>
+                    </div>
+                  )}
                 </button>
 
-                <div className="relative">
-                  <button
-                    onClick={() => setShowUserMenu(!showUserMenu)}
-                    className="w-10 h-10 rounded-full overflow-hidden border-2 border-gray-600 hover:border-gray-500 transition-colors"
-                  >
-                    <img
-                      src={user.photoURL || '/default-avatar.png'}
-                      alt={user.displayName || 'User'}
-                      className="w-full h-full object-cover"
-                    />
-                  </button>
-
+                <AnimatePresence>
                   {showUserMenu && (
-                    <div className="absolute right-0 mt-2 w-48 bg-gray-800 rounded-lg shadow-xl border border-gray-700 py-1">
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="absolute right-0 mt-2 w-48 bg-gray-800 rounded-lg shadow-lg py-1"
+                    >
                       <Link
                         to="/dashboard"
-                        className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
-                        onClick={() => setShowUserMenu(false)}
+                        className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
                       >
-                        Studio
+                        Dashboard
                       </Link>
                       <Link
                         to="/settings"
-                        className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
-                        onClick={() => setShowUserMenu(false)}
+                        className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
                       >
                         Settings
                       </Link>
-                      <hr className="my-1 border-gray-700" />
                       <button
                         onClick={handleLogout}
-                        className="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
+                        className="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
                       >
                         Sign out
                       </button>
-                    </div>
+                    </motion.div>
                   )}
-                </div>
-              </>
+                </AnimatePresence>
+              </div>
             ) : (
               <Link
                 to="/login"
@@ -135,6 +129,15 @@ export default function Navbar() {
             )}
           </div>
         </div>
+
+        {isUploading && (
+          <div className="h-1">
+            <div
+              className={`h-full transition-all ${getProgressColor()}`}
+              style={{ width: `${uploadProgress.progress}%` }}
+            />
+          </div>
+        )}
       </nav>
 
       <UploadModal />

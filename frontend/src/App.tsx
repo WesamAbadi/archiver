@@ -9,6 +9,7 @@ import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { WatchPage } from './pages/WatchPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { SearchPage } from './pages/SearchPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
 
@@ -35,6 +36,7 @@ function App() {
                   <Route path="/login" element={<LoginPage />} />
                   <Route path="/" element={<HomePage />} />
                   <Route path="/watch/:id" element={<WatchPage />} />
+                  <Route path="/search" element={<SearchPage />} />
                   <Route
                     path="/dashboard"
                     element={
