@@ -31,7 +31,7 @@ export function MediaGrid({ items }: MediaGridProps) {
       {items.map((item) => (
         <Link
           key={item.id}
-          to={`/media/${item.id}`}
+          to={`/watch/${item.id}`}
           className="group bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow duration-200"
         >
           {/* Thumbnail */}
