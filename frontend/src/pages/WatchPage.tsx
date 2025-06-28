@@ -43,6 +43,7 @@ interface Caption {
 interface CaptionSegment {
   id: string;
   startTime: number;
+  endTime: number;
   text: string;
   confidence?: number;
 }
@@ -90,12 +91,19 @@ export function WatchPage() {
   const lyricsContainerRef = useRef<HTMLDivElement>(null)
   const activeLyricRef = useRef<HTMLDivElement>(null)
 
-  // Utility function for formatting time
+  // Detect if text is Arabic/RTL
+  const isRTL = (text: string) => {
+    const arabicRegex = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+    return arabicRegex.test(text);
+  }
+
+  // Format time with better precision for songs
   const formatTime = (seconds: number) => {
     if (isNaN(seconds)) return '0:00'
     const mins = Math.floor(seconds / 60)
     const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
+    const ms = Math.floor((seconds % 1) * 100) // Show centiseconds for precision
+    return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`
   }
 
   // Get media item with comments
@@ -180,9 +188,8 @@ export function WatchPage() {
     const caption = captions[0]
     const segments = caption.segments
     
-    const currentSegment = segments.find((segment, index) => {
-      const endTime = index < segments.length - 1 ? segments[index + 1].startTime : segment.startTime + 5.0
-      return currentTime >= segment.startTime && currentTime <= endTime
+    const currentSegment = segments.find((segment) => {
+      return currentTime >= segment.startTime && currentTime <= segment.endTime
     })
     
     return currentSegment
@@ -208,22 +215,25 @@ export function WatchPage() {
     }
   }, [currentTime, captions])
 
-  // Get lyrics opacity based on proximity to current time
-  const getLyricOpacity = (segment: CaptionSegment, index: number, segments: CaptionSegment[]) => {
-    const endTime = index < segments.length - 1 ? segments[index + 1].startTime : segment.startTime + 5.0
-    
-    const isActive = currentTime >= segment.startTime && currentTime <= endTime
-    const isPast = currentTime > endTime
+  // Get lyrics opacity based on proximity to current time and confidence
+  const getLyricOpacity = (segment: CaptionSegment) => {
+    const isActive = currentTime >= segment.startTime && currentTime <= segment.endTime
+    const isPast = currentTime > segment.endTime
     const isFuture = currentTime < segment.startTime
     const timeDiff = Math.min(
       Math.abs(currentTime - segment.startTime),
-      Math.abs(currentTime - endTime)
+      Math.abs(currentTime - segment.endTime)
     )
     
-    if (isActive) return 1
-    if (isPast && timeDiff <= 10) return 0.6
-    if (isFuture && timeDiff <= 10) return 0.4
-    return 0.2
+    // Base opacity based on timing
+    let baseOpacity = 0.2
+    if (isActive) baseOpacity = 1
+    else if (isPast && timeDiff <= 5) baseOpacity = 0.6
+    else if (isFuture && timeDiff <= 5) baseOpacity = 0.4
+    
+    // Adjust opacity based on confidence
+    const confidence = segment.confidence || 0.8
+    return baseOpacity * (0.5 + confidence * 0.5) // Ensure minimum 50% opacity, scale with confidence
   }
 
   const handleShare = async () => {
@@ -510,42 +520,61 @@ export function WatchPage() {
                 {/* Captions/Transcript */}
                 {captions.length > 0 && (
                   <div className="bg-gray-800/50 rounded-xl p-6 backdrop-blur-sm">
-                    <h3 className="text-lg font-semibold mb-4">Transcript</h3>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-semibold">Transcript</h3>
+                      <div className="text-sm text-gray-400">
+                        {captions[0].segments.length} segments • Auto-generated
+                        {captions[0].segments.some(s => isRTL(s.text)) && (
+                          <span className="ml-2 px-2 py-1 bg-purple-600/20 text-purple-300 rounded text-xs">
+                            Arabic/RTL
+                          </span>
+                        )}
+                      </div>
+                    </div>
                     <div className="space-y-3 max-h-96 overflow-y-auto custom-scrollbar">
-                      {captions[0].segments.map((segment, index) => {
-                        const segments = captions[0].segments;
-                        const endTime =
-                          index < segments.length - 1
-                            ? segments[index + 1].startTime
-                            : segment.startTime + 5.0;
-                        const isActive =
-                          currentTime >= segment.startTime &&
-                          currentTime <= endTime;
+                      {captions[0].segments.map((segment) => {
+                        const isActive = currentTime >= segment.startTime && currentTime <= segment.endTime;
+                        const confidence = segment.confidence || 0.8;
+                        const isSegmentRTL = isRTL(segment.text);
 
                         return (
                           <div
                             key={segment.id}
                             className={`cursor-pointer p-3 rounded-lg transition-all duration-300 ${
                               isActive
-                                ? "bg-purple-600/20 border border-purple-600/30"
+                                ? "bg-purple-600/20 border border-purple-600/30 scale-[1.02]"
                                 : "hover:bg-gray-700/50"
                             }`}
+                            style={{ 
+                              opacity: getLyricOpacity(segment),
+                              direction: isSegmentRTL ? 'rtl' : 'ltr'
+                            }}
                             onClick={() => {
                               // TODO: Implement seek to time for video player
                               console.log("Seek to:", segment.startTime);
                             }}
                           >
-                            <div className="flex items-start space-x-3">
-                              <span className="text-purple-400 text-sm font-mono min-w-[60px]">
-                                {formatTime(segment.startTime)}
-                              </span>
-                              <p
-                                className={`text-sm leading-relaxed ${
-                                  isActive ? "text-white" : "text-gray-300"
-                                }`}
-                              >
+                            <div className="flex flex-col">
+                              <p className={`text-sm leading-relaxed transition-all duration-300 ${
+                                isActive ? "text-white font-medium" : "text-gray-300"
+                              } ${isSegmentRTL ? 'text-right font-arabic' : 'text-left'}`}>
                                 {segment.text}
                               </p>
+                              <div className={`flex items-center justify-between text-xs text-gray-500 mt-2 ${
+                                isSegmentRTL ? 'flex-row-reverse' : 'flex-row'
+                              }`}>
+                                <span className="font-mono">
+                                  {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
+                                </span>
+                                {confidence && (
+                                  <div className={`px-2 py-1 rounded text-xs ${
+                                    confidence > 0.8 ? 'text-green-400 bg-green-400/10' : 
+                                    confidence > 0.6 ? 'text-yellow-400 bg-yellow-400/10' : 'text-red-400 bg-red-400/10'
+                                  }`}>
+                                    {Math.round(confidence * 100)}%
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
                         );
@@ -1042,7 +1071,16 @@ export function WatchPage() {
               <div className="mb-6">
                 <h2 className="text-2xl font-bold mb-2">Lyrics</h2>
                 <p className="text-gray-400 text-sm">
-                  {captions.length > 0 ? `${captions[0].segments.length} lines • Auto-generated` : 'No lyrics available'}
+                  {captions.length > 0 ? (
+                    <>
+                      {captions[0].segments.length} segments • Auto-generated
+                      {captions[0].segments.some(s => isRTL(s.text)) && (
+                        <span className="ml-2 px-2 py-1 bg-purple-600/20 text-purple-300 rounded text-xs">
+                          Arabic/RTL
+                        </span>
+                      )}
+                    </>
+                  ) : 'No lyrics available'}
                 </p>
               </div>
 
@@ -1051,45 +1089,60 @@ export function WatchPage() {
                   ref={lyricsContainerRef}
                   className="flex-1 overflow-y-auto space-y-6 max-h-96 pr-4 custom-scrollbar"
                 >
+                  {/* Display phrase-level captions naturally */}
                   {captions[0].segments.map((segment, index) => {
-                    const segments = captions[0].segments
-                    const endTime = index < segments.length - 1 ? segments[index + 1].startTime : segment.startTime + 5.0
-                    const isActive = currentTime >= segment.startTime && currentTime <= endTime
-                    const opacity = getLyricOpacity(segment, index, captions[0].segments)
+                    const isActive = currentTime >= segment.startTime && currentTime <= segment.endTime;
+                    const isSegmentRTL = isRTL(segment.text);
+                    const confidence = segment.confidence || 0.8;
                     
                     return (
                       <div
                         key={segment.id}
                         ref={isActive ? activeLyricRef : null}
-                        className={`cursor-pointer transition-all duration-500 ease-out ${
-                          isActive ? 'transform scale-105' : ''
+                        className={`cursor-pointer transition-all duration-500 ease-out p-4 rounded-lg ${
+                          isActive ? 'transform scale-105 bg-purple-600/10' : 'hover:bg-gray-800/30'
                         }`}
-                        style={{ opacity }}
+                        style={{
+                          direction: isSegmentRTL ? 'rtl' : 'ltr',
+                          opacity: getLyricOpacity(segment)
+                        }}
                         onClick={() => {
                           if (mediaPlayerRef.current) {
-                            mediaPlayerRef.current.seekTo(segment.startTime)
+                            mediaPlayerRef.current.seekTo(segment.startTime);
                           }
                         }}
                       >
-                        <div className="group">
-                          <div className="text-sm text-center text-gray-500 mb-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                            {formatTime(segment.startTime)}
+                        <div className={`text-center ${isSegmentRTL ? 'rtl-content' : ''}`}>
+                          <div className="text-sm text-gray-500 mb-3 opacity-60">
+                            {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
                           </div>
-                          <p className={`text-lg text-center md:text-xl leading-relaxed transition-all duration-300 ${
+                          <p className={`text-xl md:text-2xl leading-relaxed transition-all duration-300 ${
                             isActive 
                               ? 'text-white font-medium bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent' 
                               : 'text-gray-300'
-                          } hover:text-white`}>
+                          } ${isSegmentRTL ? 'font-arabic' : ''} hover:text-white`}
+                          style={{ 
+                            fontFamily: isSegmentRTL ? 'Arial, "Noto Sans Arabic", sans-serif' : 'inherit'
+                          }}>
                             {segment.text}
                           </p>
-                          {segment.confidence && (
-                            <div className="text-xs text-gray-600 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              {Math.round(segment.confidence * 100)}% confidence
+                          {/* Show segment info */}
+                          <div className="text-xs text-gray-600 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="flex justify-center space-x-4 text-center">
+                              <span>
+                                Confidence: {Math.round(confidence * 100)}%
+                              </span>
+                              <span>
+                                Duration: {(segment.endTime - segment.startTime).toFixed(1)}s
+                              </span>
+                              <span>
+                                Segment {index + 1}
+                              </span>
                             </div>
-                          )}
+                          </div>
                         </div>
                       </div>
-                    )
+                    );
                   })}
                 </div>
               ) : (
@@ -1342,6 +1395,30 @@ export function WatchPage() {
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
+        }
+
+        /* Arabic/RTL specific styles */
+        .font-arabic {
+          font-family: 'Noto Sans Arabic', 'Amiri', 'Arial Unicode MS', Arial, sans-serif;
+          font-weight: 500;
+        }
+
+        .rtl-content {
+          direction: rtl;
+          text-align: right;
+        }
+
+        /* Improve Arabic text rendering */
+        [lang="ar"], .font-arabic {
+          font-feature-settings: "liga" 1, "calt" 1, "kern" 1;
+          text-rendering: optimizeLegibility;
+        }
+
+        /* Better spacing for Arabic text */
+        .rtl-content .text-lg,
+        .rtl-content .text-xl {
+          line-height: 1.8;
+          letter-spacing: 0.02em;
         }
       `}</style>
     </div>
