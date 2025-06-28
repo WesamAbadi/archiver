@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext'
 import MediaPlayer, { MediaPlayerRef } from '../components/MediaPlayer'
 import PlyrVideoPlayer from '../components/PlyrVideoPlayer'
 import ErrorBoundary from '../components/ErrorBoundary'
+import { PageContainer, Card, EnhancedCommentSection } from '../components/common'
 import { 
   Heart, 
   MessageCircle, 
@@ -33,7 +34,6 @@ import {
 import { formatDistanceToNow } from 'date-fns'
 import toast from 'react-hot-toast'
 import axios from 'axios'
-import CommentsModal from '../components/modals/CommentsModal'
 
 interface Caption {
   id: string;
@@ -67,6 +67,11 @@ interface MediaItem {
     downloadUrl: string;
     mimeType: string;
   }>;
+  engagement?: {
+    likes: number;
+    comments: number;
+    isLiked: boolean;
+  };
 }
 
 export function WatchPage() {
@@ -81,6 +86,7 @@ export function WatchPage() {
   const [duration, setDuration] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [liked, setLiked] = useState(false)
+  const [likeCount, setLikeCount] = useState(0)
   const [showCaptions, setShowCaptions] = useState(true)
   const [comments, setComments] = useState<any[]>([])
   const [volume, setVolume] = useState(0.8)
@@ -88,6 +94,7 @@ export function WatchPage() {
   const [newComment, setNewComment] = useState('')
   const [currentCommentIndex, setCurrentCommentIndex] = useState(0)
   const [commentTransition, setCommentTransition] = useState(false)
+  const [commentsLoading, setCommentsLoading] = useState(false)
   const mediaPlayerRef = useRef<MediaPlayerRef>(null)
   const lyricsContainerRef = useRef<HTMLDivElement>(null)
   const activeLyricRef = useRef<HTMLDivElement>(null)
@@ -111,35 +118,62 @@ export function WatchPage() {
     return `${mins}:${secs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
   }
 
-  // Get media item with comments
+  // Get media item with engagement data
   const { data: mediaData, isLoading, error } = useQuery(
     ['public-media', id],
     () => publicAPI.getMediaItem(id!),
     {
       enabled: !!id,
+      onSuccess: (data) => {
+        if (data?.data?.success) {
+          const item = data.data.data;
+          setLiked(item.engagement?.isLiked || false);
+          setLikeCount(item.engagement?.likes || item.likeCount || 0);
+        }
+      }
     }
   )
 
+  // Like mutation
+  const likeMutation = useMutation(
+    () => publicAPI.toggleLike(id!),
+    {
+      onMutate: async () => {
+        // Optimistic update
+        const previousLiked = liked;
+        const previousCount = likeCount;
+        
+        setLiked(!liked);
+        setLikeCount(prev => liked ? prev - 1 : prev + 1);
+        
+        return { previousLiked, previousCount };
+      },
+      onError: (err, variables, context) => {
+        // Revert on error
+        if (context) {
+          setLiked(context.previousLiked);
+          setLikeCount(context.previousCount);
+        }
+        toast.error('Failed to update like');
+      },
+      onSuccess: (data) => {
+        // Update with server response
+        if (data?.data?.success) {
+          setLiked(data.data.data.isLiked);
+          setLikeCount(data.data.data.engagement?.likes || likeCount);
+          toast.success(data.data.data.isLiked ? 'Added to favorites!' : 'Removed from favorites');
+        }
+      }
+    }
+  );
+
   useEffect(() => {
     if (id) {
-      fetchMedia()
       fetchCaptions()
       fetchComments()
       trackView()
     }
   }, [id])
-
-  const fetchMedia = async () => {
-    try {
-      const response = await axios.get(`/api/media/public`)
-      const item = response.data.data.find((m: any) => m.id === id)
-      if (item) {
-        setMediaItem(item)
-      }
-    } catch (error) {
-      console.error('Error fetching media:', error)
-    }
-  }
 
   const fetchCaptions = async () => {
     try {
@@ -153,11 +187,16 @@ export function WatchPage() {
   }
 
   const fetchComments = async () => {
+    setCommentsLoading(true);
     try {
-      const response = await axios.get(`/api/media/${id}/comments`)
-      setComments(response.data.data)
+      const response = await axios.get(`/api/archive/media/${id}/comments`)
+      if (response.data.success) {
+        setComments(response.data.data)
+      }
     } catch (error) {
       console.error('Error fetching comments:', error)
+    } finally {
+      setCommentsLoading(false);
     }
   }
 
@@ -174,7 +213,6 @@ export function WatchPage() {
 
   const handleTimeUpdate = useCallback(() => {
     if (mediaPlayerRef.current) {
-      // Ensure consistent time format with 3 decimal precision
       setCurrentTime(Number(mediaPlayerRef.current.currentTime.toFixed(3)));
       setDuration(Number(mediaPlayerRef.current.duration.toFixed(3)));
     }
@@ -187,6 +225,16 @@ export function WatchPage() {
   const handlePause = useCallback(() => {
     setIsPlaying(false)
   }, [])
+
+  const togglePlayPause = useCallback(() => {
+    if (mediaPlayerRef.current) {
+      if (isPlaying) {
+        mediaPlayerRef.current.pause();
+      } else {
+        mediaPlayerRef.current.play();
+      }
+    }
+  }, [isPlaying]);
 
   // Get current caption segment
   const getCurrentCaption = () => {
@@ -210,7 +258,6 @@ export function WatchPage() {
       const lyricTop = activeLyric.offsetTop
       const lyricHeight = activeLyric.clientHeight
       
-      // Center the active lyric
       const scrollTop = lyricTop - (containerHeight / 2) + (lyricHeight / 2)
       
       container.scrollTo({
@@ -229,28 +276,26 @@ export function WatchPage() {
       Math.abs(currentTimeFixed - segment.endTime)
     );
     
-    // Base opacity based on timing
-    let opacity = 0.2; // Default minimum opacity
+    let opacity = 0.2;
     
     if (isActive) {
       opacity = 1;
-    } else if (timeDiff <= 2) { // Within 2 seconds
+    } else if (timeDiff <= 2) {
       opacity = 0.6;
-    } else if (timeDiff <= 5) { // Within 5 seconds
+    } else if (timeDiff <= 5) {
       opacity = 0.4;
     }
     
-    // Adjust opacity based on confidence
     const confidence = segment.confidence || 0.8;
-    return opacity * (0.5 + confidence * 0.5); // Ensure minimum 50% of calculated opacity
+    return opacity * (0.5 + confidence * 0.5);
   }
 
   const handleShare = async () => {
     try {
-      if (navigator.share && mediaItem) {
+      if (navigator.share && mediaData?.data?.data) {
         await navigator.share({
-          title: mediaItem.title,
-          text: `Check out "${mediaItem.title}" on ArchiveDrop`,
+          title: mediaData.data.data.title,
+          text: `Check out "${mediaData.data.data.title}" on ArchiveDrop`,
           url: window.location.href,
         })
       } else {
@@ -268,8 +313,8 @@ export function WatchPage() {
   }
 
   const handleDownload = async () => {
-    if (mediaItem?.files?.[0]?.downloadUrl) {
-      window.open(mediaItem.files[0].downloadUrl, '_blank')
+    if (mediaData?.data?.data?.files?.[0]?.downloadUrl) {
+      window.open(mediaData.data.data.files[0].downloadUrl, '_blank')
       toast.success('⬇️ Download started!')
     }
   }
@@ -279,26 +324,7 @@ export function WatchPage() {
       toast.error('Please sign in to like content')
       return
     }
-    try {
-      const token = await getToken()
-      await axios.post(`/api/media/${id}/like`, 
-        { liked: !liked },
-        { headers: { Authorization: `Bearer ${token}` }}
-      )
-      setLiked(!liked)
-    } catch (error) {
-      console.error('Error toggling like:', error)
-    }
-  }
-
-  const togglePlayPause = () => {
-    if (mediaPlayerRef.current) {
-      if (isPlaying) {
-        mediaPlayerRef.current.pause()
-      } else {
-        mediaPlayerRef.current.play()
-      }
-    }
+    likeMutation.mutate();
   }
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -308,88 +334,61 @@ export function WatchPage() {
     }
   }
 
-  const handleAddComment = async () => {
-    if (!user || !newComment.trim()) {
-      if (!user) {
-        toast.error('Please sign in to comment')
-      }
+  const handleAddComment = async (content: string) => {
+    if (!user) {
+      toast.error('Please sign in to comment')
       return
     }
     
     try {
       const token = await getToken()
-      const response = await axios.post(`/api/media/${id}/comments`, 
-        { content: newComment },
+      const response = await axios.post(`/api/archive/media/${id}/comment`, 
+        { content },
         { headers: { Authorization: `Bearer ${token}` }}
       )
-      setComments([response.data.data, ...comments])
-      setNewComment('')
-      toast.success('Comment added!')
+      
+      if (response.data.success) {
+        // Add the new comment to the beginning of the list
+        setComments([response.data.data, ...comments])
+        toast.success('Comment added!')
+      }
     } catch (error) {
       console.error('Error adding comment:', error)
       toast.error('Failed to add comment')
     }
   }
 
-  const getRandomComment = () => {
-    if (comments.length === 0) return null
-    return comments[Math.floor(Math.random() * comments.length)]
-  }
-
-  const getCurrentDisplayComment = () => {
-    if (comments.length === 0) {
-      return {
-        user: { displayName: 'Anonymous', photoURL: null },
-        content: 'Be the first to comment on this track! Share your thoughts...',
-        isPlaceholder: true
-      }
-    }
-    return comments[currentCommentIndex % comments.length]
-  }
-
-  // Smooth comment transition effect
-  useEffect(() => {
-    if (comments.length <= 1) return
-
-    const interval = setInterval(() => {
-      setCommentTransition(true)
-      
-      setTimeout(() => {
-        setCurrentCommentIndex(prev => (prev + 1) % comments.length)
-        setCommentTransition(false)
-      }, 300) // Half of transition duration
-    }, 8000) // Change comment every 8 seconds
-
-    return () => clearInterval(interval)
-  }, [comments.length])
-
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="relative">
-            <div className="w-16 h-16 border-4 border-purple-600/20 border-t-purple-500 rounded-full animate-spin mx-auto mb-6"></div>
+      <PageContainer variant="gradient">
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="text-center">
+            <div className="relative">
+              <div className="w-16 h-16 border-4 border-purple-600/20 border-t-purple-500 rounded-full animate-spin mx-auto mb-6"></div>
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">Loading Content</h2>
+            <p className="text-gray-400">Preparing your experience...</p>
           </div>
-          <h2 className="text-2xl font-bold text-white mb-2">Loading Music</h2>
-          <p className="text-gray-400">Preparing your audio experience...</p>
         </div>
-      </div>
+      </PageContainer>
     )
   }
 
   if (error || !mediaData?.data.success) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-6xl mb-4">🎵</div>
-          <h1 className="text-2xl font-bold text-white mb-2">Track Not Found</h1>
-          <p className="text-gray-400 mb-6">This track may have been removed or made private.</p>
-          <Link to="/" className="px-6 py-3 bg-purple-600 text-white rounded-full hover:bg-purple-700 transition-colors inline-flex items-center">
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Library
-          </Link>
+      <PageContainer variant="gradient">
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="text-center">
+            <div className="text-6xl mb-4">🎵</div>
+            <h1 className="text-2xl font-bold text-white mb-2">Content Not Found</h1>
+            <p className="text-gray-400 mb-6">This content may have been removed or made private.</p>
+            <Link to="/" className="px-6 py-3 bg-purple-600 text-white rounded-full hover:bg-purple-700 transition-colors inline-flex items-center">
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back to Library
+            </Link>
+          </div>
         </div>
-      </div>
+      </PageContainer>
     )
   }
 
@@ -400,12 +399,7 @@ export function WatchPage() {
   // Video content with Plyr player
   if (isVideo) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 text-white">
-        {/* Background Pattern */}
-        <div className="absolute inset-0 opacity-5">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(120,119,198,0.3),rgba(255,255,255,0))]"></div>
-        </div>
-
+      <PageContainer variant="gradient">
         {/* Navigation */}
         <div className="relative z-10 p-6">
           <Link
@@ -422,7 +416,7 @@ export function WatchPage() {
           <div className="max-w-6xl mx-auto">
             {/* Video Player */}
             <div className="mb-8">
-              <div className="bg-black rounded-xl overflow-hidden shadow-2xl">
+              <Card variant="default" className="bg-black">
                 <PlyrVideoPlayer
                   src={primaryFile.downloadUrl}
                   title={mediaData.data.data.title}
@@ -433,75 +427,77 @@ export function WatchPage() {
                   onDurationChange={(duration) => setDuration(duration)}
                   className="max-w-[50vh] h-full m-auto"
                 />
-              </div>
+              </Card>
             </div>
 
             {/* Video Info */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               {/* Main Content */}
               <div className="lg:col-span-2 space-y-6">
-                {/* Title and Stats */}
-                <div>
-                  <h1 className="text-3xl md:text-4xl font-bold mb-4 bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
-                    {mediaData.data.data.title}
-                  </h1>
+                <Card variant="default" className="p-6">
+                  {/* Title and Stats */}
+                  <div>
+                    <h1 className="text-3xl md:text-4xl font-bold mb-4 bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
+                      {mediaData.data.data.title}
+                    </h1>
 
-                  <div className="flex items-center space-x-6 text-gray-400 mb-4">
-                    <div className="flex items-center space-x-2">
-                      <Eye className="w-5 h-5" />
-                      <span>{mediaData.data.data.viewCount || 0} views</span>
+                    <div className="flex items-center space-x-6 text-gray-400 mb-4">
+                      <div className="flex items-center space-x-2">
+                        <Eye className="w-5 h-5" />
+                        <span>{mediaData.data.data.viewCount || 0} views</span>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <Heart
+                          className={`w-5 h-5 ${
+                            liked ? "fill-current text-red-500" : ""
+                          }`}
+                        />
+                        <span>{likeCount}</span>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <MessageCircle className="w-5 h-5" />
+                        <span>{comments.length} comments</span>
+                      </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <Heart
-                        className={`w-5 h-5 ${
-                          liked ? "fill-current text-red-500" : ""
+
+                    {/* Action Buttons */}
+                    <div className="flex items-center space-x-4">
+                      <button
+                        onClick={handleLike}
+                        className={`flex items-center space-x-2 px-6 py-3 rounded-full transition-all ${
+                          liked
+                            ? "bg-red-600/20 text-red-400 border border-red-600/30"
+                            : "bg-gray-800 text-gray-300 hover:text-white hover:bg-gray-700"
                         }`}
-                      />
-                      <span>{mediaData.data.data.likeCount || 0}</span>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <MessageCircle className="w-5 h-5" />
-                      <span>{comments.length} comments</span>
+                      >
+                        <Heart
+                          className={`w-5 h-5 ${liked ? "fill-current" : ""}`}
+                        />
+                        <span>{liked ? "Liked" : "Like"}</span>
+                      </button>
+
+                      <button
+                        onClick={handleShare}
+                        className="flex items-center space-x-2 px-6 py-3 bg-gray-800 text-gray-300 rounded-full hover:text-white hover:bg-gray-700 transition-colors"
+                      >
+                        <Share2 className="w-5 h-5" />
+                        <span>Share</span>
+                      </button>
+
+                      <button
+                        onClick={handleDownload}
+                        className="flex items-center space-x-2 px-6 py-3 bg-gray-800 text-gray-300 rounded-full hover:text-white hover:bg-gray-700 transition-colors"
+                      >
+                        <Download className="w-5 h-5" />
+                        <span>Download</span>
+                      </button>
                     </div>
                   </div>
-
-                  {/* Action Buttons */}
-                  <div className="flex items-center space-x-4">
-                    <button
-                      onClick={handleLike}
-                      className={`flex items-center space-x-2 px-6 py-3 rounded-full transition-all ${
-                        liked
-                          ? "bg-red-600/20 text-red-400 border border-red-600/30"
-                          : "bg-gray-800 text-gray-300 hover:text-white hover:bg-gray-700"
-                      }`}
-                    >
-                      <Heart
-                        className={`w-5 h-5 ${liked ? "fill-current" : ""}`}
-                      />
-                      <span>{liked ? "Liked" : "Like"}</span>
-                    </button>
-
-                    <button
-                      onClick={handleShare}
-                      className="flex items-center space-x-2 px-6 py-3 bg-gray-800 text-gray-300 rounded-full hover:text-white hover:bg-gray-700 transition-colors"
-                    >
-                      <Share2 className="w-5 h-5" />
-                      <span>Share</span>
-                    </button>
-
-                    <button
-                      onClick={handleDownload}
-                      className="flex items-center space-x-2 px-6 py-3 bg-gray-800 text-gray-300 rounded-full hover:text-white hover:bg-gray-700 transition-colors"
-                    >
-                      <Download className="w-5 h-5" />
-                      <span>Download</span>
-                    </button>
-                  </div>
-                </div>
+                </Card>
 
                 {/* Description */}
                 {mediaData.data.data.description && (
-                  <div className="bg-gray-800/50 rounded-xl p-6 backdrop-blur-sm">
+                  <Card variant="default" className="p-6">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-lg font-semibold">Description</h3>
                       {mediaData.data.data.description.length > 200 && (
@@ -523,80 +519,27 @@ export function WatchPage() {
                             ? "..."
                             : "")}
                     </p>
-                  </div>
+                  </Card>
                 )}
 
-                {/* Captions/Transcript */}
-                {captions.length > 0 && (
-                  <div className="bg-gray-800/50 rounded-xl p-6 backdrop-blur-sm">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-semibold">Transcript</h3>
-                      <div className="text-sm text-gray-400">
-                        {captions[0].segments.length} segments • Auto-generated
-                        {captions[0].segments.some(s => isRTL(s.text)) && (
-                          <span className="ml-2 px-2 py-1 bg-purple-600/20 text-purple-300 rounded text-xs">
-                            Arabic/RTL
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="space-y-3 max-h-96 overflow-y-auto custom-scrollbar">
-                      {captions[0].segments.map((segment) => {
-                        const isActive = currentTime >= segment.startTime && currentTime <= segment.endTime;
-                        const confidence = segment.confidence || 0.8;
-                        const isSegmentRTL = isRTL(segment.text);
-
-                        return (
-                          <div
-                            key={segment.id}
-                            className={`cursor-pointer p-3 rounded-lg transition-all duration-300 ${
-                              isActive
-                                ? "bg-purple-600/20 border border-purple-600/30 scale-[1.02]"
-                                : "hover:bg-gray-700/50"
-                            }`}
-                            style={{ 
-                              opacity: getLyricOpacity(segment),
-                              direction: isSegmentRTL ? 'rtl' : 'ltr'
-                            }}
-                            onClick={() => {
-                              // TODO: Implement seek to time for video player
-                              console.log("Seek to:", segment.startTime);
-                            }}
-                          >
-                            <div className="flex flex-col">
-                              <p className={`text-sm leading-relaxed transition-all duration-300 ${
-                                isActive ? "text-white font-medium" : "text-gray-300"
-                              } ${isSegmentRTL ? 'text-right font-arabic' : 'text-left'}`}>
-                                {segment.text}
-                              </p>
-                              <div className={`flex items-center justify-between text-xs text-gray-500 mt-2 ${
-                                isSegmentRTL ? 'flex-row-reverse' : 'flex-row'
-                              }`}>
-                                <span className="font-mono">
-                                  {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
-                                </span>
-                                {confidence && (
-                                  <div className={`px-2 py-1 rounded text-xs ${
-                                    confidence > 0.8 ? 'text-green-400 bg-green-400/10' : 
-                                    confidence > 0.6 ? 'text-yellow-400 bg-yellow-400/10' : 'text-red-400 bg-red-400/10'
-                                  }`}>
-                                    {Math.round(confidence * 100)}%
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+                {/* Comments Section */}
+                <Card variant="default" className="p-6">
+                  <EnhancedCommentSection
+                    comments={comments}
+                    onAddComment={handleAddComment}
+                    user={user ? {
+                      displayName: user.displayName || 'Anonymous',
+                      photoURL: user.photoURL
+                    } : null}
+                    isLoading={commentsLoading}
+                  />
+                </Card>
               </div>
 
               {/* Sidebar */}
               <div className="lg:col-span-1">
                 {/* Creator Info */}
-                <div className="bg-gray-800/50 rounded-xl p-6 backdrop-blur-sm mb-6">
+                <Card variant="default" className="p-6 mb-6">
                   <div className="flex items-center space-x-4 mb-4">
                     <img
                       src={
@@ -614,10 +557,10 @@ export function WatchPage() {
                       <p className="text-gray-400 text-sm">Content Creator</p>
                     </div>
                   </div>
-                </div>
+                </Card>
 
                 {/* Stats */}
-                <div className="bg-gray-800/50 rounded-xl p-6 backdrop-blur-sm">
+                <Card variant="default" className="p-6">
                   <h4 className="font-semibold mb-4">Video Stats</h4>
                   <div className="space-y-3">
                     <div className="flex justify-between">
@@ -629,7 +572,7 @@ export function WatchPage() {
                     <div className="flex justify-between">
                       <span className="text-gray-400">Likes</span>
                       <span className="text-white">
-                        {mediaData.data.data.likeCount || 0}
+                        {likeCount}
                       </span>
                     </div>
                     <div className="flex justify-between">
@@ -641,156 +584,12 @@ export function WatchPage() {
                       <span className="text-white">{formatTime(duration)}</span>
                     </div>
                   </div>
-                </div>
+                </Card>
               </div>
             </div>
           </div>
         </div>
-
-        {/* Floating Comment Card */}
-        <div className="fixed bottom-6 right-6 z-20">
-          <div
-            className={`bg-black/80 backdrop-blur-md rounded-2xl p-6 max-w-md cursor-pointer hover:bg-black/90 transition-all duration-500 border border-white/10 transform ${
-              commentTransition
-                ? "scale-95 opacity-70"
-                : "scale-100 opacity-100"
-            }`}
-            onClick={() => setShowCommentsModal(true)}
-          >
-            <div className="flex items-start space-x-4">
-              <div
-                className={`transition-all duration-500 ${
-                  commentTransition
-                    ? "opacity-0 scale-90"
-                    : "opacity-100 scale-100"
-                }`}
-              >
-                <img
-                  src={
-                    getCurrentDisplayComment()?.user?.photoURL ||
-                    "/default-avatar.png"
-                  }
-                  alt="Commenter"
-                  className="w-12 h-12 rounded-full border border-white/20"
-                />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div
-                  className={`flex items-center space-x-3 mb-2 transition-all duration-500 ${
-                    commentTransition
-                      ? "opacity-0 translate-y-2"
-                      : "opacity-100 translate-y-0"
-                  }`}
-                >
-                  <span className="text-white text-base font-medium truncate">
-                    {getCurrentDisplayComment()?.user?.displayName ||
-                      "Anonymous"}
-                  </span>
-                  <MessageCircle
-                    className={`w-5 h-5 ${
-                      getCurrentDisplayComment()?.isPlaceholder
-                        ? "text-purple-400 animate-pulse"
-                        : "text-purple-400"
-                    }`}
-                  />
-                </div>
-                <p
-                  className={`text-gray-300 text-sm line-clamp-3 leading-relaxed transition-all duration-500 ${
-                    commentTransition
-                      ? "opacity-0 translate-y-2"
-                      : "opacity-100 translate-y-0"
-                  } ${
-                    getCurrentDisplayComment()?.isPlaceholder
-                      ? "italic text-gray-400"
-                      : ""
-                  }`}
-                >
-                  {getCurrentDisplayComment()?.content}
-                </p>
-              </div>
-            </div>
-            <div
-              className={`mt-4 flex items-center justify-between text-xs text-gray-400 transition-all duration-500 ${
-                commentTransition
-                  ? "opacity-0 translate-y-2"
-                  : "opacity-100 translate-y-0"
-              }`}
-            >
-              <span className="font-medium mr-4">
-                {comments.length === 0
-                  ? "No comments yet"
-                  : `${comments.length} comment${
-                      comments.length !== 1 ? "s" : ""
-                    }`}
-              </span>
-              <div className="flex items-center space-x-4">
-                {comments.length > 1 &&
-                  !getCurrentDisplayComment()?.isPlaceholder && (
-                    <div className="flex space-x-1.5">
-                      {Array.from({ length: Math.min(comments.length, 3) }).map(
-                        (_, i) => (
-                          <div
-                            key={i}
-                            className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                              i ===
-                              currentCommentIndex % Math.min(comments.length, 3)
-                                ? "bg-purple-400"
-                                : "bg-gray-600"
-                            }`}
-                          />
-                        )
-                      )}
-                    </div>
-                  )}
-                <span className="text-purple-300 font-medium">
-                  {getCurrentDisplayComment()?.isPlaceholder
-                    ? "Tap to comment"
-                    : "View all"}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Comments Modal */}
-        <CommentsModal
-          isOpen={showCommentsModal}
-          onClose={() => setShowCommentsModal(false)}
-          comments={comments}
-          newComment={newComment}
-          setNewComment={setNewComment}
-          onAddComment={handleAddComment}
-          user={user}
-        />
-
-        {/* Custom Styles */}
-        <style>{`
-          .custom-scrollbar::-webkit-scrollbar {
-            width: 6px;
-          }
-          
-          .custom-scrollbar::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 3px;
-          }
-          
-          .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: rgba(139, 92, 246, 0.6);
-            border-radius: 3px;
-          }
-          
-          .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: rgba(139, 92, 246, 0.8);
-          }
-
-          .line-clamp-3 {
-            display: -webkit-box;
-            -webkit-line-clamp: 3;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-          }
-        `}</style>
-      </div>
+      </PageContainer>
     );
   }
 
@@ -812,12 +611,7 @@ export function WatchPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 text-white overflow-hidden">
-      {/* Background Pattern */}
-      <div className="absolute inset-0 opacity-5">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(120,119,198,0.3),rgba(255,255,255,0))]"></div>
-      </div>
-
+    <PageContainer variant="gradient">
       {/* Navigation */}
       <div className="relative z-10 p-6">
         <Link 
@@ -830,10 +624,9 @@ export function WatchPage() {
       </div>
 
       {/* Main Player Interface */}
-      <div className="relative z-10 flex-1 flex items-center justify-center p-6">
+      <div className="relative z-10 flex-1 p-6">
         <div className="w-full max-w-7xl mx-auto">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-            
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
             {/* Left Side - Album Art & Controls */}
             <div className="flex flex-col items-center space-y-8">
               {/* Album Art */}
@@ -858,7 +651,7 @@ export function WatchPage() {
                       className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-xl hover:scale-105 transition-transform"
                     >
                       {isPlaying ? (
-                        <Pause className="w-8 h-8 text-black ml-1" />
+                        <Pause className="w-8 h-8 text-black" />
                       ) : (
                         <Play className="w-8 h-8 text-black ml-1" />
                       )}
@@ -903,7 +696,6 @@ export function WatchPage() {
                 <button 
                   className="text-gray-400 hover:text-white transition-colors"
                   onClick={() => {
-                    // Shuffle functionality - for now just show a toast
                     toast.success('Shuffle mode toggled');
                   }}
                 >
@@ -913,7 +705,6 @@ export function WatchPage() {
                 <button 
                   className="text-gray-400 hover:text-white transition-colors"
                   onClick={() => {
-                    // Skip back 10 seconds
                     if (mediaPlayerRef.current) {
                       const newTime = Math.max(0, currentTime - 10);
                       mediaPlayerRef.current.seekTo(newTime);
@@ -937,7 +728,6 @@ export function WatchPage() {
                 <button 
                   className="text-gray-400 hover:text-white transition-colors"
                   onClick={() => {
-                    // Skip forward 10 seconds
                     if (mediaPlayerRef.current) {
                       const newTime = Math.min(duration, currentTime + 10);
                       mediaPlayerRef.current.seekTo(newTime);
@@ -950,7 +740,6 @@ export function WatchPage() {
                 <button 
                   className="text-gray-400 hover:text-white transition-colors"
                   onClick={() => {
-                    // Repeat functionality - for now just show a toast
                     toast.success('Repeat mode toggled');
                   }}
                 >
@@ -969,7 +758,7 @@ export function WatchPage() {
                   }`}
                 >
                   <Heart className={`w-5 h-5 ${liked ? 'fill-current' : ''}`} />
-                  <span>{mediaData.data.data.likeCount || 0}</span>
+                  <span>{likeCount}</span>
                 </button>
 
                 <button
@@ -992,7 +781,7 @@ export function WatchPage() {
               </div>
             </div>
 
-            {/* Right Side - Synchronized Lyrics */}
+            {/* Right Side - Lyrics */}
             <div className="flex flex-col h-full">
               <div className="mb-6">
                 <h2 className="text-2xl font-bold mb-2">Lyrics</h2>
@@ -1082,83 +871,21 @@ export function WatchPage() {
               )}
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Floating Comment Card */}
-      <div className="fixed bottom-6 right-6 z-20">
-        <div 
-          className={`bg-black/80 backdrop-blur-md rounded-2xl p-6 max-w-md cursor-pointer hover:bg-black/90 transition-all duration-500 border border-white/10 transform ${
-            commentTransition ? 'scale-95 opacity-70' : 'scale-100 opacity-100'
-          }`}
-          onClick={() => setShowCommentsModal(true)}
-        >
-          <div className="flex items-start space-x-4">
-            <div className={`transition-all duration-500 ${commentTransition ? 'opacity-0 scale-90' : 'opacity-100 scale-100'}`}>
-              <img
-                src={getCurrentDisplayComment()?.user?.photoURL || '/default-avatar.png'}
-                alt="Commenter"
-                className="w-12 h-12 rounded-full border border-white/20"
-              />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className={`flex items-center space-x-3 mb-2 transition-all duration-500 ${
-                commentTransition ? 'opacity-0 translate-y-2' : 'opacity-100 translate-y-0'
-              }`}>
-                <span className="text-white text-base font-medium truncate">
-                  {getCurrentDisplayComment()?.user?.displayName || 'Anonymous'}
-                </span>
-                <MessageCircle className={`w-5 h-5 ${getCurrentDisplayComment()?.isPlaceholder ? 'text-purple-400 animate-pulse' : 'text-purple-400'}`} />
-              </div>
-              <p className={`text-gray-300 text-sm line-clamp-3 leading-relaxed transition-all duration-500 ${
-                commentTransition ? 'opacity-0 translate-y-2' : 'opacity-100 translate-y-0'
-              } ${getCurrentDisplayComment()?.isPlaceholder ? 'italic text-gray-400' : ''}`}>
-                {getCurrentDisplayComment()?.content}
-              </p>
-            </div>
-          </div>
-          <div className={`mt-4 flex items-center justify-between text-xs text-gray-400 transition-all duration-500 ${
-            commentTransition ? 'opacity-0 translate-y-2' : 'opacity-100 translate-y-0'
-          }`}>
-            <span className="font-medium mr-4">
-              {comments.length === 0 
-                ? 'No comments yet' 
-                : `${comments.length} comment${comments.length !== 1 ? 's' : ''}`
-              }
-            </span>
-            <div className="flex items-center space-x-4">
-              {comments.length > 1 && !getCurrentDisplayComment()?.isPlaceholder && (
-                <div className="flex space-x-1.5">
-                  {Array.from({ length: Math.min(comments.length, 3) }).map((_, i) => (
-                    <div 
-                      key={i}
-                      className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                        i === currentCommentIndex % Math.min(comments.length, 3) 
-                          ? 'bg-purple-400' 
-                          : 'bg-gray-600'
-                      }`}
-                    />
-                  ))}
-                </div>
-              )}
-              <span className="text-purple-300 font-medium">
-                {getCurrentDisplayComment()?.isPlaceholder ? 'Tap to comment' : 'View all'}
-              </span>
-            </div>
+          {/* Comments Section */}
+          <div className="mt-12">
+            <EnhancedCommentSection
+              comments={comments}
+              onAddComment={handleAddComment}
+              user={user ? {
+                displayName: user.displayName || 'Anonymous',
+                photoURL: user.photoURL
+              } : null}
+              isLoading={commentsLoading}
+            />
           </div>
         </div>
       </div>
-
-      {/* Comments Modal */}
-      <CommentsModal
-        isOpen={showCommentsModal}
-        onClose={() => setShowCommentsModal(false)}
-        comments={comments}
-        newComment={newComment}
-        setNewComment={setNewComment}
-        onAddComment={handleAddComment}
-        user={user}
-      />
 
       {/* Hidden Audio Player */}
       <div className="hidden">
@@ -1247,6 +974,6 @@ export function WatchPage() {
           letter-spacing: 0.02em;
         }
       `}</style>
-    </div>
+    </PageContainer>
   )
 } 

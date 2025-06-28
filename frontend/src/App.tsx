@@ -31,7 +31,7 @@ function App() {
           <UploadProvider>
             <div className="min-h-screen bg-gray-900">
               <Navbar />
-              <div className="pt-14">
+              <div className="pb-20 md:pb-0 md:pt-14">
                 <Routes>
                   <Route path="/login" element={<LoginPage />} />
                   <Route path="/" element={<HomePage />} />

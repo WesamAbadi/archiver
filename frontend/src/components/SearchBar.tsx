@@ -265,7 +265,7 @@ export function SearchBar({
           {suggestions.length > 0 && (
             <>
               {searchResults?.items.length > 0 && (
-                <div className="px-4 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-750">
+                <div className="px-4 py-2 text-xs font-medium">
                   Suggestions
                 </div>
               )}

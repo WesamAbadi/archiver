@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Globe, Lock, Users, Upload } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../contexts/SocketContext';
 import { useUpload, UploadProgress } from '../../contexts/UploadContext';
@@ -22,12 +23,11 @@ export default function UploadModal() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const jobIdRef = useRef<string | null>(null);
   
-  const [activeTab, setActiveTab] = useState<'file' | 'url'>('file');
   const [file, setFile] = useState<File | null>(null);
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [visibility, setVisibility] = useState<'PRIVATE' | 'PUBLIC' | 'UNLISTED'>('PRIVATE');
+  const [visibility, setVisibility] = useState<'PRIVATE' | 'PUBLIC' | 'UNLISTED'>('PUBLIC');
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
@@ -71,7 +71,14 @@ export default function UploadModal() {
   };
 
   const handleUpload = async () => {
-    if (!title || (!file && !url)) return;
+    if (url.trim()) {
+      // URL upload - only need URL
+      if (!url) return;
+    } else {
+      // File upload - need title and file
+      if (!title || !file) return;
+    }
+    
     startUpload();
     jobIdRef.current = null;
 
@@ -79,9 +86,13 @@ export default function UploadModal() {
       const token = await getToken();
       let response;
 
-      if (file) {
+      if (url.trim()) {
+        response = await axios.post('/api/media/submit', { url, title, description, visibility, tags }, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+      } else {
         const formData = new FormData();
-        formData.append('file', file);
+        formData.append('file', file!);
         formData.append('title', title);
         formData.append('description', description);
         formData.append('visibility', visibility);
@@ -102,10 +113,6 @@ export default function UploadModal() {
             }
           }
         });
-      } else {
-        response = await axios.post('/api/media/submit', { url, title, description, visibility, tags }, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
       }
 
       if (!jobIdRef.current && response.data?.data?.jobId) {
@@ -113,11 +120,37 @@ export default function UploadModal() {
       }
     } catch (error) {
       console.error('Upload failed:', error);
+      
+      let errorMessage = 'Upload failed';
+      let errorDetails = '';
+      
+      if (axios.isAxiosError(error) && error.response) {
+        const responseData = error.response.data;
+        if (responseData?.message) {
+          errorMessage = responseData.message;
+        } else if (responseData?.error) {
+          errorMessage = responseData.error;
+        }
+        
+        // Handle specific URL validation errors
+        if (errorMessage.includes('SoundCloud download failed') || 
+            errorMessage.includes('Status code 404') ||
+            errorMessage.includes('private or unavailable')) {
+          errorMessage = 'Invalid or unavailable URL';
+          errorDetails = 'The URL you provided is either invalid, private, or the content has been removed';
+        } else if (errorMessage.includes('Download failed')) {
+          errorMessage = 'Unable to download content';
+          errorDetails = 'Please check the URL and try again';
+        }
+      } else {
+        errorDetails = error instanceof Error ? error.message : String(error);
+      }
+      
       setUploadProgress({
         stage: 'error',
         progress: 100,
-        message: 'Upload failed',
-        details: error instanceof Error ? error.message : String(error),
+        message: errorMessage,
+        details: errorDetails,
         error: true,
       });
     }
@@ -182,24 +215,28 @@ export default function UploadModal() {
     }
   };
 
+  const isUrlMode = url.trim().length > 0;
+
   const footer = (
-    <div className="flex items-center justify-between">
+    <div className="flex justify-end space-x-3">
       <button
+        type="button"
         onClick={handleCancel}
-        className="px-4 py-2 text-gray-300 hover:bg-gray-700 rounded-lg transition-colors"
+        className="px-6 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors disabled:opacity-50"
         disabled={isUploading && uploadProgress.stage === 'complete'}
       >
-        {isUploading && uploadProgress.stage !== 'complete' ? 'Cancel Upload' : 'Close'}
+        {isUploading && uploadProgress.stage !== 'complete' ? 'Cancel Upload' : 'Cancel'}
       </button>
       <button
-        onClick={handleUpload}
-        disabled={!title || (!file && !url) || isUploading}
-        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        type="submit"
+        form="upload-form"
+        className="px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 transition-all"
+        disabled={(isUrlMode ? !url.trim() : (!title || !file)) || isUploading}
       >
         {isUploading ? (
-          <span className="flex items-center gap-2">
-            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+          <span className="flex items-center">
+            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>
             Processing...
@@ -247,12 +284,12 @@ export default function UploadModal() {
       <Modal
         isOpen={showUploadModal}
         onClose={handleDismiss}
-        title="Upload content"
+        title="Upload Content"
         maxWidth="2xl"
         closeOnBackdrop={!isUploading}
         footer={footer}
       >
-        <div className="p-6">
+        <form id="upload-form" onSubmit={(e) => { e.preventDefault(); handleUpload(); }} className="p-6 space-y-6">
           <AnimatePresence>
             {isUploading && (
               <motion.div
@@ -261,17 +298,17 @@ export default function UploadModal() {
                 exit={{ opacity: 0, height: 0 }}
                 className="overflow-hidden"
               >
-                <div className="mb-6 p-4 bg-gray-700 rounded-lg">
-                  <div className="flex items-center gap-3 mb-2">
+                <div className="mb-6 p-4 bg-gray-800 border border-gray-700 rounded-xl">
+                  <div className="flex items-center gap-3 mb-3">
                     <span className="text-2xl">{getStageIcon()}</span>
                     <div className="flex-1">
                       <p className="text-white font-medium">{uploadProgress.message}</p>
                       {uploadProgress.details && (
-                        <p className="text-gray-400 text-sm">{uploadProgress.details}</p>
+                        <p className="text-gray-400 text-sm mt-1">{uploadProgress.details}</p>
                       )}
                     </div>
                   </div>
-                  <div className="w-full bg-gray-600 rounded-full h-3 overflow-hidden">
+                  <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
                     <div
                       className={`h-full ${getProgressColor()} transition-all duration-300 ease-out`}
                       style={{ width: `${uploadProgress.progress}%` }}
@@ -296,130 +333,194 @@ export default function UploadModal() {
               <motion.div
                 initial={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden"
+                className="overflow-hidden space-y-6"
               >
-                <div className="flex gap-2 mb-6">
-                  <button
-                    onClick={() => setActiveTab('file')}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                      activeTab === 'file'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                    }`}
-                  >
-                    Upload file
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('url')}
-                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                      activeTab === 'url'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                    }`}
-                  >
+                {/* URL Input */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
                     Import from URL
-                  </button>
-                </div>
-
-                {activeTab === 'file' ? (
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-dashed border-gray-600 rounded-lg p-8 text-center cursor-pointer hover:border-gray-500 transition-colors"
-                  >
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      onChange={handleFileSelect}
-                      className="hidden"
-                      accept="video/*,audio/*,image/*"
-                    />
-                    {file ? (
-                      <div>
-                        <p className="text-white font-medium">{file.name}</p>
-                        <p className="text-gray-400 text-sm mt-1">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
-                      </div>
-                    ) : (
-                      <div>
-                        <svg className="w-12 h-12 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                        </svg>
-                        <p className="text-gray-300">Click to select file</p>
-                        <p className="text-gray-500 text-sm mt-1">MP4, MOV, MP3, WAV, JPG, PNG (max 100MB)</p>
-                      </div>
-                    )}
-                  </div>
-                ) : (
+                  </label>
                   <input
                     type="text"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     placeholder="Paste YouTube, SoundCloud, or Twitter URL"
-                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
                   />
-                )}
-
-                <div className="mt-6 space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Title*</label>
-                    <input
-                      type="text"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="Enter a title"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Description</label>
-                    <textarea
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      rows={3}
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="Tell viewers about your content"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Visibility</label>
-                    <select
-                      value={visibility}
-                      onChange={(e) => setVisibility(e.target.value as any)}
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    >
-                      <option value="PRIVATE">Private</option>
-                      <option value="UNLISTED">Unlisted</option>
-                      <option value="PUBLIC">Public</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Tags</label>
-                    <input
-                      type="text"
-                      value={tagInput}
-                      onChange={(e) => setTagInput(e.target.value)}
-                      onKeyDown={handleAddTag}
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="Add tags and press Enter"
-                    />
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {tags.map((tag, index) => (
-                        <span key={index} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-600 text-gray-200 rounded text-sm">
-                          {tag}
-                          <button onClick={() => handleRemoveTag(index)} className="text-gray-400 hover:text-white">
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
                 </div>
+
+                {/* OR Divider - only show when no URL */}
+                <AnimatePresence>
+                  {!isUrlMode && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.3, ease: 'easeInOut' }}
+                      className="overflow-hidden"
+                    >
+                      <div className="relative flex items-center">
+                        <div className="flex-grow border-t border-gray-700"></div>
+                        <span className="flex-shrink mx-4 text-gray-400 text-sm font-medium">OR</span>
+                        <div className="flex-grow border-t border-gray-700"></div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* File Upload and Form - only show when no URL */}
+                <AnimatePresence>
+                  {!isUrlMode && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.3, ease: 'easeInOut' }}
+                      className="overflow-hidden space-y-4"
+                    >
+                      {/* File Input */}
+                      <div
+                        onClick={() => fileInputRef.current?.click()}
+                        className="border-2 border-dashed border-gray-700 rounded-xl p-8 text-center cursor-pointer hover:border-gray-600 hover:bg-gray-800/50 transition-all"
+                      >
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          onChange={handleFileSelect}
+                          className="hidden"
+                          accept="video/*,audio/*,image/*"
+                        />
+                        {file ? (
+                          <div className="space-y-2">
+                            <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl mx-auto flex items-center justify-center">
+                              <Upload className="w-8 h-8 text-white" />
+                            </div>
+                            <p className="text-white font-medium">{file.name}</p>
+                            <p className="text-gray-400 text-sm">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            <div className="w-16 h-16 bg-gray-700 rounded-xl mx-auto flex items-center justify-center">
+                              <Upload className="w-8 h-8 text-gray-400" />
+                            </div>
+                            <div>
+                              <p className="text-gray-300 font-medium">Click to select file</p>
+                              <p className="text-gray-500 text-sm">MP4, MOV, MP3, WAV, JPG, PNG (max 100MB)</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Form Fields */}
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-2">
+                            Title *
+                          </label>
+                          <input
+                            type="text"
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
+                            placeholder="Enter a title"
+                            required
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-2">
+                            Description
+                          </label>
+                          <textarea
+                            value={description}
+                            onChange={(e) => setDescription(e.target.value)}
+                            rows={4}
+                            className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all resize-none"
+                            placeholder="Tell viewers about your content"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-2">
+                            Visibility
+                          </label>
+                          <div className="grid grid-cols-3 gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setVisibility('PUBLIC')}
+                              className={`flex items-center justify-center px-4 py-3 rounded-xl border transition-all ${
+                                visibility === 'PUBLIC'
+                                  ? 'bg-green-500/20 border-green-500 text-green-400'
+                                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                              }`}
+                            >
+                              <Globe className="w-4 h-4 mr-2" />
+                              Public
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setVisibility('UNLISTED')}
+                              className={`flex items-center justify-center px-4 py-3 rounded-xl border transition-all ${
+                                visibility === 'UNLISTED'
+                                  ? 'bg-yellow-500/20 border-yellow-500 text-yellow-400'
+                                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                              }`}
+                            >
+                              <Users className="w-4 h-4 mr-2" />
+                              Unlisted
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setVisibility('PRIVATE')}
+                              className={`flex items-center justify-center px-4 py-3 rounded-xl border transition-all ${
+                                visibility === 'PRIVATE'
+                                  ? 'bg-red-500/20 border-red-500 text-red-400'
+                                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                              }`}
+                            >
+                              <Lock className="w-4 h-4 mr-2" />
+                              Private
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-2">
+                            Tags
+                          </label>
+                          <input
+                            type="text"
+                            value={tagInput}
+                            onChange={(e) => setTagInput(e.target.value)}
+                            onKeyDown={handleAddTag}
+                            className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
+                            placeholder="Add tags and press Enter"
+                          />
+                          {tags.length > 0 && (
+                            <div className="flex flex-wrap gap-2 mt-3">
+                              {tags.map((tag, index) => (
+                                <span key={index} className="inline-flex items-center gap-1 px-3 py-1 bg-gray-700 text-gray-200 rounded-lg text-sm">
+                                  {tag}
+                                  <button 
+                                    type="button"
+                                    onClick={() => handleRemoveTag(index)} 
+                                    className="text-gray-400 hover:text-white ml-1"
+                                  >
+                                    ×
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
+        </form>
       </Modal>
     </>
   );

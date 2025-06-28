@@ -46,13 +46,27 @@ export class SearchService {
         WITH caption_matches AS (
           SELECT DISTINCT 
             c."mediaItemId",
-            MAX(similarity(cs.text, ${searchQuery})) as caption_sim,
+            MAX(
+              GREATEST(
+                similarity(cs.text, ${searchQuery}),
+                word_similarity(cs.text, ${searchQuery}),
+                similarity(
+                  regexp_replace(cs.text, '[^\w\s]', '', 'g'), 
+                  regexp_replace(${searchQuery}, '[^\w\s]', '', 'g')
+                )
+              )
+            ) as caption_sim,
             string_agg(cs.text, ' ') as matching_text
           FROM caption_segments cs
           JOIN captions c ON c.id = cs."captionId"
           WHERE 
             cs.text % ${searchQuery}
             OR cs.text ILIKE ${`%${searchQuery}%`}
+            OR word_similarity(cs.text, ${searchQuery}) > 0.3
+            OR similarity(
+              regexp_replace(cs.text, '[^\w\s]', '', 'g'),
+              regexp_replace(${searchQuery}, '[^\w\s]', '', 'g')
+            ) > 0.3
           GROUP BY c."mediaItemId"
         ),
         ranked_items AS (
@@ -85,10 +99,14 @@ export class SearchService {
             m."viewCount",
             m."likeCount",
             m."commentCount",
-            COALESCE(ts_rank_cd(m."searchVector", to_tsquery('english', ${tsQuery})), 0) * 3 +
-            COALESCE(similarity(m.title, ${searchQuery}), 0) * 2 +
-            COALESCE(similarity(COALESCE(m.description, ''), ${searchQuery}), 0) +
-            COALESCE(cm.caption_sim, 0) * 1.5 as rank,
+            GREATEST(
+              COALESCE(ts_rank_cd(m."searchVector", to_tsquery('english', ${tsQuery})), 0) * 3,
+              COALESCE(similarity(m.title, ${searchQuery}), 0) * 2,
+              COALESCE(word_similarity(m.title, ${searchQuery}), 0) * 2,
+              COALESCE(similarity(COALESCE(m.description, ''), ${searchQuery}), 0),
+              COALESCE(word_similarity(COALESCE(m.description, ''), ${searchQuery}), 0),
+              COALESCE(cm.caption_sim, 0) * 1.5
+            ) as rank,
             cm.matching_text as caption_match
           FROM "media_items" m
           LEFT JOIN caption_matches cm ON cm."mediaItemId" = m.id
@@ -99,7 +117,9 @@ export class SearchService {
               OR m.title ILIKE ${`%${searchQuery}%`}
               OR m.description ILIKE ${`%${searchQuery}%`}
               OR m.title % ${searchQuery}
+              OR word_similarity(m.title, ${searchQuery}) > 0.3
               OR m.description % ${searchQuery}
+              OR word_similarity(m.description, ${searchQuery}) > 0.3
               OR EXISTS (
                 SELECT 1 
                 FROM caption_segments cs
@@ -108,6 +128,11 @@ export class SearchService {
                 AND (
                   cs.text % ${searchQuery}
                   OR cs.text ILIKE ${`%${searchQuery}%`}
+                  OR word_similarity(cs.text, ${searchQuery}) > 0.3
+                  OR similarity(
+                    regexp_replace(cs.text, '[^\w\s]', '', 'g'),
+                    regexp_replace(${searchQuery}, '[^\w\s]', '', 'g')
+                  ) > 0.3
                 )
               )
             )
