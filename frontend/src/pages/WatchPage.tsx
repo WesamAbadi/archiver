@@ -33,6 +33,7 @@ import {
 import { formatDistanceToNow } from 'date-fns'
 import toast from 'react-hot-toast'
 import axios from 'axios'
+import CommentsModal from '../components/modals/CommentsModal'
 
 interface Caption {
   id: string;
@@ -97,13 +98,17 @@ export function WatchPage() {
     return arabicRegex.test(text);
   }
 
-  // Format time with better precision for songs
+  // Format time with consistent 3 decimal precision
   const formatTime = (seconds: number) => {
-    if (isNaN(seconds)) return '0:00'
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    const ms = Math.floor((seconds % 1) * 100) // Show centiseconds for precision
-    return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`
+    if (isNaN(seconds)) return '0:00.000';
+    
+    const totalSeconds = Math.max(0, seconds);
+    
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = Math.floor(totalSeconds % 60);
+    const millis = Math.round((totalSeconds - Math.floor(totalSeconds)) * 1000);
+    
+    return `${mins}:${secs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
   }
 
   // Get media item with comments
@@ -169,10 +174,11 @@ export function WatchPage() {
 
   const handleTimeUpdate = useCallback(() => {
     if (mediaPlayerRef.current) {
-      setCurrentTime(mediaPlayerRef.current.currentTime)
-      setDuration(mediaPlayerRef.current.duration)
+      // Ensure consistent time format with 3 decimal precision
+      setCurrentTime(Number(mediaPlayerRef.current.currentTime.toFixed(3)));
+      setDuration(Number(mediaPlayerRef.current.duration.toFixed(3)));
     }
-  }, [])
+  }, []);
 
   const handlePlay = useCallback(() => {
     setIsPlaying(true)
@@ -182,17 +188,16 @@ export function WatchPage() {
     setIsPlaying(false)
   }, [])
 
+  // Get current caption segment
   const getCurrentCaption = () => {
-    if (!captions.length || !showCaptions) return null
+    if (!captions.length || !showCaptions) return null;
     
-    const caption = captions[0]
-    const segments = caption.segments
+    const currentTimeFixed = Number(currentTime.toFixed(3));
+    const caption = captions[0];
     
-    const currentSegment = segments.find((segment) => {
-      return currentTime >= segment.startTime && currentTime <= segment.endTime
-    })
-    
-    return currentSegment
+    return caption.segments.find((segment) => 
+      currentTimeFixed >= segment.startTime && currentTimeFixed <= segment.endTime
+    );
   }
 
   // Auto-scroll to active lyric
@@ -215,25 +220,29 @@ export function WatchPage() {
     }
   }, [currentTime, captions])
 
-  // Get lyrics opacity based on proximity to current time and confidence
+  // Get lyrics opacity based on proximity to current time
   const getLyricOpacity = (segment: CaptionSegment) => {
-    const isActive = currentTime >= segment.startTime && currentTime <= segment.endTime
-    const isPast = currentTime > segment.endTime
-    const isFuture = currentTime < segment.startTime
+    const currentTimeFixed = Number(currentTime.toFixed(3));
+    const isActive = currentTimeFixed >= segment.startTime && currentTimeFixed <= segment.endTime;
     const timeDiff = Math.min(
-      Math.abs(currentTime - segment.startTime),
-      Math.abs(currentTime - segment.endTime)
-    )
+      Math.abs(currentTimeFixed - segment.startTime),
+      Math.abs(currentTimeFixed - segment.endTime)
+    );
     
     // Base opacity based on timing
-    let baseOpacity = 0.2
-    if (isActive) baseOpacity = 1
-    else if (isPast && timeDiff <= 5) baseOpacity = 0.6
-    else if (isFuture && timeDiff <= 5) baseOpacity = 0.4
+    let opacity = 0.2; // Default minimum opacity
+    
+    if (isActive) {
+      opacity = 1;
+    } else if (timeDiff <= 2) { // Within 2 seconds
+      opacity = 0.6;
+    } else if (timeDiff <= 5) { // Within 5 seconds
+      opacity = 0.4;
+    }
     
     // Adjust opacity based on confidence
-    const confidence = segment.confidence || 0.8
-    return baseOpacity * (0.5 + confidence * 0.5) // Ensure minimum 50% opacity, scale with confidence
+    const confidence = segment.confidence || 0.8;
+    return opacity * (0.5 + confidence * 0.5); // Ensure minimum 50% of calculated opacity
   }
 
   const handleShare = async () => {
@@ -293,9 +302,9 @@ export function WatchPage() {
   }
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newTime = parseFloat(e.target.value)
+    const newTime = Number(parseFloat(e.target.value).toFixed(3));
     if (mediaPlayerRef.current) {
-      mediaPlayerRef.current.seekTo(newTime)
+      mediaPlayerRef.current.seekTo(newTime);
     }
   }
 
@@ -744,136 +753,15 @@ export function WatchPage() {
         </div>
 
         {/* Comments Modal */}
-        {showCommentsModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-            <div className="bg-gray-900 rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-hidden border border-white/10">
-              {/* Modal Header */}
-              <div className="p-6 border-b border-gray-700">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-2xl font-bold text-white flex items-center">
-                    <MessageCircle className="w-6 h-6 mr-3 text-purple-400" />
-                    Comments ({comments.length})
-                  </h2>
-                  <button
-                    onClick={() => setShowCommentsModal(false)}
-                    className="text-gray-400 hover:text-white transition-colors p-2"
-                  >
-                    <svg
-                      className="w-6 h-6"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-
-              {/* Add Comment Form */}
-              {user ? (
-                <div className="p-6 border-b border-gray-700">
-                  <div className="flex space-x-4">
-                    <img
-                      src={user.photoURL || "/default-avatar.png"}
-                      alt={user.displayName || "You"}
-                      className="w-12 h-12 rounded-full border-2 border-purple-600/50"
-                    />
-                    <div className="flex-1">
-                      <textarea
-                        value={newComment}
-                        onChange={(e) => setNewComment(e.target.value)}
-                        placeholder="Add a comment..."
-                        className="w-full bg-gray-800 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none transition-all"
-                        rows={3}
-                      />
-                      <div className="flex justify-end mt-3">
-                        <button
-                          onClick={handleAddComment}
-                          disabled={!newComment.trim()}
-                          className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
-                        >
-                          <Send className="w-4 h-4 mr-2" />
-                          Comment
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-6 border-b border-gray-700 text-center">
-                  <p className="text-gray-300 mb-4">
-                    Sign in to leave a comment
-                  </p>
-                  <Link
-                    to="/login"
-                    className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors inline-block"
-                  >
-                    Sign In
-                  </Link>
-                </div>
-              )}
-
-              {/* Comments List */}
-              <div className="flex-1 overflow-y-auto max-h-96 p-6 space-y-6">
-                {comments.length === 0 ? (
-                  <div className="text-center py-12">
-                    <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <MessageCircle className="w-8 h-8 text-gray-500" />
-                    </div>
-                    <p className="text-gray-300 text-lg">No comments yet</p>
-                    <p className="text-gray-500 text-sm">
-                      Be the first to share your thoughts!
-                    </p>
-                  </div>
-                ) : (
-                  comments.map((comment: any) => (
-                    <div
-                      key={comment.id}
-                      className="flex space-x-4 p-4 bg-gray-800 rounded-xl border border-gray-700"
-                    >
-                      <img
-                        src={comment.user.photoURL || "/default-avatar.png"}
-                        alt={comment.user.displayName}
-                        className="w-10 h-10 rounded-full border border-gray-600"
-                      />
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-2 mb-2">
-                          <span className="font-semibold text-white">
-                            {comment.user.displayName}
-                          </span>
-                          <span className="text-sm text-gray-500">
-                            {(() => {
-                              try {
-                                const date = new Date(comment.createdAt);
-                                if (isNaN(date.getTime())) {
-                                  return "Recently";
-                                }
-                                return formatDistanceToNow(date, {
-                                  addSuffix: true,
-                                });
-                              } catch (error) {
-                                return "Recently";
-                              }
-                            })()}
-                          </span>
-                        </div>
-                        <p className="text-gray-300 leading-relaxed">
-                          {comment.content}
-                        </p>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        <CommentsModal
+          isOpen={showCommentsModal}
+          onClose={() => setShowCommentsModal(false)}
+          comments={comments}
+          newComment={newComment}
+          setNewComment={setNewComment}
+          onAddComment={handleAddComment}
+          user={user}
+        />
 
         {/* Custom Styles */}
         <style>{`
@@ -951,9 +839,17 @@ export function WatchPage() {
               {/* Album Art */}
               <div className="relative group">
                 <div className="w-80 h-80 md:w-96 md:h-96 rounded-3xl bg-gradient-to-br from-purple-500 via-pink-500 to-red-500 shadow-2xl overflow-hidden">
-                  <div className="w-full h-full flex items-center justify-center bg-black/20 backdrop-blur-sm">
-                    <div className="text-8xl">🎵</div>
-                  </div>
+                  {mediaData.data.data.thumbnailUrl ? (
+                    <img
+                      src={mediaData.data.data.thumbnailUrl}
+                      alt={mediaData.data.data.title}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-black/20 backdrop-blur-sm">
+                      <div className="text-8xl">🎵</div>
+                    </div>
+                  )}
                   
                   {/* Play/Pause Overlay */}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
@@ -1004,11 +900,26 @@ export function WatchPage() {
 
               {/* Controls */}
               <div className="flex items-center space-x-8">
-                <button className="text-gray-400 hover:text-white transition-colors">
+                <button 
+                  className="text-gray-400 hover:text-white transition-colors"
+                  onClick={() => {
+                    // Shuffle functionality - for now just show a toast
+                    toast.success('Shuffle mode toggled');
+                  }}
+                >
                   <Shuffle className="w-5 h-5" />
                 </button>
                 
-                <button className="text-gray-400 hover:text-white transition-colors">
+                <button 
+                  className="text-gray-400 hover:text-white transition-colors"
+                  onClick={() => {
+                    // Skip back 10 seconds
+                    if (mediaPlayerRef.current) {
+                      const newTime = Math.max(0, currentTime - 10);
+                      mediaPlayerRef.current.seekTo(newTime);
+                    }
+                  }}
+                >
                   <SkipBack className="w-6 h-6" />
                 </button>
                 
@@ -1023,11 +934,26 @@ export function WatchPage() {
                   )}
                 </button>
                 
-                <button className="text-gray-400 hover:text-white transition-colors">
+                <button 
+                  className="text-gray-400 hover:text-white transition-colors"
+                  onClick={() => {
+                    // Skip forward 10 seconds
+                    if (mediaPlayerRef.current) {
+                      const newTime = Math.min(duration, currentTime + 10);
+                      mediaPlayerRef.current.seekTo(newTime);
+                    }
+                  }}
+                >
                   <SkipForward className="w-6 h-6" />
                 </button>
                 
-                <button className="text-gray-400 hover:text-white transition-colors">
+                <button 
+                  className="text-gray-400 hover:text-white transition-colors"
+                  onClick={() => {
+                    // Repeat functionality - for now just show a toast
+                    toast.success('Repeat mode toggled');
+                  }}
+                >
                   <Repeat className="w-5 h-5" />
                 </button>
               </div>
@@ -1113,7 +1039,7 @@ export function WatchPage() {
                         }}
                       >
                         <div className={`text-center ${isSegmentRTL ? 'rtl-content' : ''}`}>
-                          <div className="text-sm text-gray-500 mb-3 opacity-60">
+                          <div className="text-sm text-white mb-3">
                             {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
                           </div>
                           <p className={`text-xl md:text-2xl leading-relaxed transition-all duration-300 ${
@@ -1224,115 +1150,15 @@ export function WatchPage() {
       </div>
 
       {/* Comments Modal */}
-      {showCommentsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="bg-gray-900 rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-hidden border border-white/10">
-            {/* Modal Header */}
-            <div className="p-6 border-b border-gray-700">
-              <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold text-white flex items-center">
-                  <MessageCircle className="w-6 h-6 mr-3 text-purple-400" />
-                  Comments ({comments.length})
-                </h2>
-                <button
-                  onClick={() => setShowCommentsModal(false)}
-                  className="text-gray-400 hover:text-white transition-colors p-2"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            {/* Add Comment Form */}
-            {user ? (
-              <div className="p-6 border-b border-gray-700">
-                <div className="flex space-x-4">
-                  <img
-                    src={user.photoURL || '/default-avatar.png'}
-                    alt={user.displayName || 'You'}
-                    className="w-12 h-12 rounded-full border-2 border-purple-600/50"
-                  />
-                  <div className="flex-1">
-                    <textarea
-                      value={newComment}
-                      onChange={(e) => setNewComment(e.target.value)}
-                      placeholder="Add a comment..."
-                      className="w-full bg-gray-800 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none transition-all"
-                      rows={3}
-                    />
-                    <div className="flex justify-end mt-3">
-                      <button
-                        onClick={handleAddComment}
-                        disabled={!newComment.trim()}
-                        className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
-                      >
-                        <Send className="w-4 h-4 mr-2" />
-                        Comment
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="p-6 border-b border-gray-700 text-center">
-                <p className="text-gray-300 mb-4">Sign in to leave a comment</p>
-                <Link 
-                  to="/login" 
-                  className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors inline-block"
-                >
-                  Sign In
-                </Link>
-              </div>
-            )}
-
-            {/* Comments List */}
-            <div className="flex-1 overflow-y-auto max-h-96 p-6 space-y-6">
-              {comments.length === 0 ? (
-                <div className="text-center py-12">
-                  <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <MessageCircle className="w-8 h-8 text-gray-500" />
-                  </div>
-                  <p className="text-gray-300 text-lg">No comments yet</p>
-                  <p className="text-gray-500 text-sm">Be the first to share your thoughts!</p>
-                </div>
-              ) : (
-                comments.map((comment: any) => (
-                  <div key={comment.id} className="flex space-x-4 p-4 bg-gray-800 rounded-xl border border-gray-700">
-                    <img
-                      src={comment.user.photoURL || '/default-avatar.png'}
-                      alt={comment.user.displayName}
-                      className="w-10 h-10 rounded-full border border-gray-600"
-                    />
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-2 mb-2">
-                        <span className="font-semibold text-white">
-                          {comment.user.displayName}
-                        </span>
-                        <span className="text-sm text-gray-500">
-                          {(() => {
-                            try {
-                              const date = new Date(comment.createdAt);
-                              if (isNaN(date.getTime())) {
-                                return 'Recently';
-                              }
-                              return formatDistanceToNow(date, { addSuffix: true });
-                            } catch (error) {
-                              return 'Recently';
-                            }
-                          })()}
-                        </span>
-                      </div>
-                      <p className="text-gray-300 leading-relaxed">{comment.content}</p>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <CommentsModal
+        isOpen={showCommentsModal}
+        onClose={() => setShowCommentsModal(false)}
+        comments={comments}
+        newComment={newComment}
+        setNewComment={setNewComment}
+        onAddComment={handleAddComment}
+        user={user}
+      />
 
       {/* Hidden Audio Player */}
       <div className="hidden">

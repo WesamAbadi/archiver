@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import { useUpload } from '../contexts/UploadContext'
-import UploadModal from './UploadModal'
+import UploadModal from './modals/UploadModal'
 
 export default function Navbar() {
   const { user, logout } = useAuth()

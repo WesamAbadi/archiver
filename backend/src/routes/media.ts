@@ -234,14 +234,13 @@ router.get('/:id', authenticateToken, asyncHandler(async (req: AuthenticatedRequ
 
 // Update media item
 router.patch('/:id', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const { title, description, visibility, tags } = req.body;
+  const { title, description, visibility } = req.body;
   
   const mediaDownloadService = new MediaDownloadService();
   const updatedItem = await mediaDownloadService.updateMediaItem(req.params.id, req.user.uid, {
     title,
     description,
     visibility: visibility ? visibility.toUpperCase() as Visibility : undefined,
-    tags,
   });
   
   res.json({ success: true, data: updatedItem });

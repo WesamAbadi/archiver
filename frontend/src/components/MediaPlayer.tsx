@@ -21,6 +21,7 @@ export interface MediaPlayerRef {
   play: () => void;
   pause: () => void;
   seekTo: (time: number) => void;
+  setVolume: (volume: number) => void;
 }
 
 export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(({ 
@@ -60,6 +61,11 @@ export const MediaPlayer = forwardRef<MediaPlayerRef, MediaPlayerProps>(({
     seekTo: (time: number) => {
       if (mediaElementRef.current) {
         mediaElementRef.current.currentTime = time;
+      }
+    },
+    setVolume: (volume: number) => {
+      if (mediaElementRef.current) {
+        mediaElementRef.current.volume = Math.max(0, Math.min(1, volume));
       }
     },
   }));
