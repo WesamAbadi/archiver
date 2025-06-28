@@ -7,8 +7,9 @@ export class BackblazeService {
   private b2: B2;
   private bucketId: string;
   private bucketName: string;
+  private io?: any; // Socket.IO instance for progress updates
 
-  constructor() {
+  constructor(io?: any) {
     this.b2 = new B2({
       applicationKeyId: process.env.B2_APPLICATION_KEY_ID!,
       applicationKey: process.env.B2_APPLICATION_KEY!,
@@ -16,6 +17,7 @@ export class BackblazeService {
     
     this.bucketId = process.env.B2_BUCKET_ID!;
     this.bucketName = process.env.B2_BUCKET_NAME!;
+    this.io = io;
   }
 
   async initialize(): Promise<void> {
@@ -26,7 +28,7 @@ export class BackblazeService {
     }
   }
 
-  async uploadFile(filePath: string, originalName: string, userId: string): Promise<{
+  async uploadFile(filePath: string, originalName: string, userId: string, jobId?: string): Promise<{
     fileId: string;
     fileName: string;
     filename: string;
@@ -39,13 +41,18 @@ export class BackblazeService {
       try {
         await this.initialize();
         
-        // Create user-specific path
         const fileName = `users/${userId}/${Date.now()}-${originalName}`;
         
-        console.log(`📤 Starting B2 upload: ${originalName} (Attempt ${retryCount + 1}/${maxRetries})`);
-        console.log(`📁 Upload path: ${fileName}`);
+        if (this.io && jobId) {
+          this.io.to(`user:${userId}`).emit('upload-progress', {
+            jobId,
+            stage: 'b2',
+            progress: 0,
+            message: 'Starting cloud storage upload...',
+            details: `Uploading ${originalName} to Backblaze B2`
+          });
+        }
         
-        // Get upload URL with timeout
         const uploadUrlResponse = await Promise.race([
           this.b2.getUploadUrl({
             bucketId: this.bucketId,
@@ -55,28 +62,21 @@ export class BackblazeService {
           )
         ]) as any;
         
-        console.log(`🔗 Got upload URL from B2`);
-        
-        // Read file and get stats
         const fileBuffer = fs.readFileSync(filePath);
         const fileStats = fs.statSync(filePath);
         const fileSizeMB = (fileStats.size / (1024 * 1024)).toFixed(2);
         
-        console.log(`📊 File size: ${fileSizeMB}MB (${fileStats.size} bytes)`);
-        
         const startTime = Date.now();
         let lastProgressUpdate = 0;
         let lastProgressTime = startTime;
-        let consecutiveSlowUpdates = 0;
         
-        // Upload file with enhanced progress tracking and speed monitoring
         const uploadResponse = await Promise.race([
           this.b2.uploadFile({
             uploadUrl: uploadUrlResponse.data.uploadUrl,
             uploadAuthToken: uploadUrlResponse.data.authorizationToken,
             fileName: fileName,
             data: fileBuffer,
-            hash: null, // Let B2 calculate the hash
+            hash: null,
             info: {
               originalName: originalName,
               uploadedBy: userId,
@@ -85,28 +85,24 @@ export class BackblazeService {
             onUploadProgress: (progress: any) => {
               if (progress && progress.loaded !== undefined && progress.total !== undefined) {
                 const percentage = Math.round((progress.loaded / progress.total) * 100);
-                const uploadedMB = (progress.loaded / (1024 * 1024)).toFixed(2);
-                const totalMB = (progress.total / (1024 * 1024)).toFixed(2);
-                const currentTime = Date.now();
                 
-                // Update progress every 5% or every 2 seconds
-                if (percentage >= lastProgressUpdate + 5 || currentTime - lastProgressTime > 2000) {
-                  const elapsedTime = (currentTime - startTime) / 1000;
-                  const currentSpeedMBps = elapsedTime > 0 ? (progress.loaded / (1024 * 1024) / elapsedTime).toFixed(2) : '0';
-                  const instantSpeedMBps = lastProgressTime > 0 ? 
-                    ((progress.loaded - (progress.total * lastProgressUpdate / 100)) / (1024 * 1024) / ((currentTime - lastProgressTime) / 1000)).toFixed(2) : currentSpeedMBps;
-                  
-                  console.log(`⬆️ Uploading to B2... ${percentage}% (${uploadedMB}/${totalMB}MB) - ${currentSpeedMBps} MB/s avg, ${instantSpeedMBps} MB/s current`);
-                  
-                  // Monitor for speed degradation
-                  const speedMBps = parseFloat(instantSpeedMBps);
-                  if (speedMBps < 0.1 && percentage > 10) {
-                    consecutiveSlowUpdates++;
-                    if (consecutiveSlowUpdates >= 3) {
-                      console.log(`🐌 Detected significant speed degradation (${speedMBps} MB/s). Upload may be stalling.`);
-                    }
-                  } else {
-                    consecutiveSlowUpdates = 0;
+                // Throttle progress updates to avoid overwhelming the client
+                if (percentage > lastProgressUpdate) {
+                  const uploadedMB = (progress.loaded / (1024 * 1024)).toFixed(2);
+                  const totalMB = (progress.total / (1024 * 1024)).toFixed(2);
+                  const currentTime = Date.now();
+                  const elapsedTime = (currentTime - lastProgressTime) / 1000;
+                  const instantSpeedMBps = elapsedTime > 0 ? 
+                    ((progress.loaded - (progress.total * lastProgressUpdate / 100)) / (1024 * 1024) / elapsedTime).toFixed(2) : '0';
+
+                  if (this.io && jobId) {
+                    this.io.to(`user:${userId}`).emit('upload-progress', {
+                      jobId,
+                      stage: 'b2',
+                      progress: percentage,
+                      message: `Uploading to cloud storage... ${percentage}%`,
+                      details: `${uploadedMB}/${totalMB}MB - ${instantSpeedMBps} MB/s`
+                    });
                   }
                   
                   lastProgressUpdate = percentage;
@@ -123,14 +119,9 @@ export class BackblazeService {
         const uploadTime = ((Date.now() - startTime) / 1000).toFixed(1);
         const uploadSpeedMBps = (fileStats.size / (1024 * 1024) / parseFloat(uploadTime)).toFixed(2);
         
-        console.log(`✅ B2 upload completed: 100%`);
-        console.log(`⚡ Upload speed: ${uploadSpeedMBps} MB/s (${uploadTime}s total)`);
-        console.log(`🆔 File ID: ${uploadResponse.data.fileId}`);
+        console.log(`B2 upload completed: ${uploadSpeedMBps} MB/s in ${uploadTime}s`);
         
-        // Generate download URL
-        console.log(`🔗 Generating download URL...`);
         const downloadUrl = await this.getDownloadUrl(fileName);
-        console.log(`✅ Download URL ready: ${downloadUrl.substring(0, 50)}...`);
         
         return {
           fileId: uploadResponse.data.fileId,
@@ -147,17 +138,14 @@ export class BackblazeService {
             errorMessage.includes('ECONNRESET') || errorMessage.includes('ETIMEDOUT')) {
           
           if (retryCount < maxRetries) {
-            const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
-            console.log(`⚠️ Upload failed due to connection issue: ${errorMessage}`);
-            console.log(`🔄 Retrying upload in ${delay/1000}s... (Attempt ${retryCount + 1}/${maxRetries})`);
-            
-            // Wait before retry
+            const delay = Math.pow(2, retryCount) * 1000;
+            console.log(`B2 upload failed, retrying in ${delay/1000}s...`);
             await new Promise(resolve => setTimeout(resolve, delay));
             continue;
           }
         }
         
-        console.error(`❌ B2 upload failed after ${retryCount} attempts: ${errorMessage}`);
+        console.error(`B2 upload failed after ${retryCount} attempts: ${errorMessage}`);
         throw createError(`Failed to upload file to B2 after ${retryCount} attempts: ${errorMessage}`, 500);
       }
     }

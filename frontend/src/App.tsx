@@ -2,6 +2,8 @@ import React from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import { AuthProvider } from './contexts/AuthContext';
+import { SocketProvider } from './contexts/SocketContext';
+import { UploadProvider } from './contexts/UploadContext';
 import HomePage from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -24,32 +26,36 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <div className="min-h-screen bg-gray-900">
-          <Navbar />
-          <div className="pt-14">
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/" element={<HomePage />} />
-              <Route path="/watch/:id" element={<WatchPage />} />
-              <Route
-                path="/dashboard"
-                element={
-                  <ProtectedRoute>
-                    <DashboardPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/settings"
-                element={
-                  <ProtectedRoute>
-                    <SettingsPage />
-                  </ProtectedRoute>
-                }
-              />
-            </Routes>
-          </div>
-        </div>
+        <SocketProvider>
+          <UploadProvider>
+            <div className="min-h-screen bg-gray-900">
+              <Navbar />
+              <div className="pt-14">
+                <Routes>
+                  <Route path="/login" element={<LoginPage />} />
+                  <Route path="/" element={<HomePage />} />
+                  <Route path="/watch/:id" element={<WatchPage />} />
+                  <Route
+                    path="/dashboard"
+                    element={
+                      <ProtectedRoute>
+                        <DashboardPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/settings"
+                    element={
+                      <ProtectedRoute>
+                        <SettingsPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                </Routes>
+              </div>
+            </div>
+          </UploadProvider>
+        </SocketProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

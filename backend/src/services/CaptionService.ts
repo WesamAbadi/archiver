@@ -17,15 +17,17 @@ interface TranscriptionResponse {
 
 export class CaptionService {
   private client: GoogleGenAI;
+  private io?: any; // Socket.IO instance for progress updates
 
-  constructor() {
+  constructor(io?: any) {
     this.client = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY!
     });
+    this.io = io;
   }
 
   // Wait for uploaded file to be in ACTIVE state
-  private async waitForFileToBeActive(fileName: string, maxWaitTime: number = 60000): Promise<void> {
+  private async waitForFileToBeActive(fileName: string, userId?: string, jobId?: string, maxWaitTime: number = 60000): Promise<void> {
     const startTime = Date.now();
     const pollInterval = 2000; // Check every 2 seconds
     
@@ -38,6 +40,18 @@ export class CaptionService {
         
         if (fileInfo.state === 'ACTIVE') {
           console.log(`✅ File ${fileName} is now ACTIVE and ready for processing`);
+          
+          // Emit progress update
+          if (this.io && userId && jobId) {
+            this.io.to(`user:${userId}`).emit('upload-progress', {
+              jobId,
+              stage: 'gemini',
+              progress: 50,
+              message: 'File ready for transcription',
+              details: 'AI service has processed the file successfully'
+            });
+          }
+          
           return;
         }
         
@@ -79,10 +93,21 @@ export class CaptionService {
     return (minutes * 60) + seconds + fractionalPart;
   }
 
-  async generateCaptions(mediaItemId: string, filePath: string): Promise<any> {
+  async generateCaptions(mediaItemId: string, filePath: string, userId?: string, jobId?: string): Promise<any> {
     try {
       console.log(`🎤 Starting phrase-level caption generation for media item: ${mediaItemId}`);
       console.log(`📁 File path: ${filePath}`);
+      
+      // Emit caption generation start
+      if (this.io && userId && jobId) {
+        this.io.to(`user:${userId}`).emit('upload-progress', {
+          jobId,
+          stage: 'transcription',
+          progress: 0,
+          message: 'Starting caption generation...',
+          details: 'Preparing file for AI transcription'
+        });
+      }
       
       const fileBuffer = fs.readFileSync(filePath);
       const fileSizeKB = Math.round(fileBuffer.length / 1024);
@@ -138,14 +163,37 @@ export class CaptionService {
 
       // Upload file to Gemini Files API
       console.log(`🤖 Uploading file to Gemini API...`);
+      
+      // Emit Gemini upload progress
+      if (this.io && userId && jobId) {
+        this.io.to(`user:${userId}`).emit('upload-progress', {
+          jobId,
+          stage: 'gemini',
+          progress: 20,
+          message: 'Uploading to AI service...',
+          details: 'Sending file to Gemini for transcription'
+        });
+      }
+      
       const uploadResult = await this.client.files.upload({
         file: filePath
       });
 
       console.log(`✅ File uploaded with URI: ${uploadResult.uri}`);
       
+      // Emit waiting for file to be active
+      if (this.io && userId && jobId) {
+        this.io.to(`user:${userId}`).emit('upload-progress', {
+          jobId,
+          stage: 'gemini',
+          progress: 40,
+          message: 'Processing file...',
+          details: 'Waiting for AI service to process the file'
+        });
+      }
+      
       // Wait for file to be processed and become ACTIVE
-      await this.waitForFileToBeActive(uploadResult.name);
+      await this.waitForFileToBeActive(uploadResult.name, userId, jobId);
       
       const prompt = `Transcribe this ${mimeType.startsWith('audio') ? 'audio' : 'video'} file with phrase-level timestamps for natural caption segments.
 
@@ -187,6 +235,18 @@ IMPORTANT: Create natural caption segments like you see in YouTube videos or mov
 Return ONLY the JSON with phrase-level transcription using TOTAL SECONDS for all timestamps.`;
 
       console.log(`🤖 Sending phrase-level transcription request to Gemini API...`);
+      
+      // Emit transcription progress
+      if (this.io && userId && jobId) {
+        this.io.to(`user:${userId}`).emit('upload-progress', {
+          jobId,
+          stage: 'transcription',
+          progress: 60,
+          message: 'Transcribing content...',
+          details: 'AI is analyzing and transcribing the audio/video'
+        });
+      }
+      
       const result = await this.client.models.generateContent({
         model: "gemini-2.5-flash",
         contents: [
@@ -340,10 +400,34 @@ Return ONLY the JSON with phrase-level transcription using TOTAL SECONDS for all
         }
       });
 
-      console.log(`�� Successfully saved phrase-level caption with ${caption.segments.length} segments to database`);
+      console.log(`💾 Successfully saved phrase-level caption with ${caption.segments.length} segments to database`);
+      
+      // Emit completion
+      if (this.io && userId && jobId) {
+        this.io.to(`user:${userId}`).emit('upload-progress', {
+          jobId,
+          stage: 'transcription',
+          progress: 100,
+          message: 'Caption generation complete!',
+          details: `Generated ${caption.segments.length} caption segments`
+        });
+      }
+      
       return caption;
     } catch (error) {
       console.error('💥 Caption generation error:', error);
+      
+      // Emit error
+      if (this.io && userId && jobId) {
+        this.io.to(`user:${userId}`).emit('upload-progress', {
+          jobId,
+          stage: 'transcription',
+          progress: 0,
+          message: 'Caption generation failed',
+          details: (error as Error).message
+        });
+      }
+      
       throw new Error(`Failed to generate captions: ${(error as Error).message}`);
     }
   }

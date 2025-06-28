@@ -14,6 +14,7 @@ import { AnalyticsService } from '../services/AnalyticsService';
 import { detectPlatform, validateUrl } from '../utils/urlUtils';
 import { Visibility, Platform } from '../types';
 import prisma from '../lib/database';
+import { uploadCancellationService } from '../services/UploadCancellationService';
 
 const router: Router = Router();
 const upload = multer({ 
@@ -179,7 +180,19 @@ router.post('/upload', authenticateToken, upload.single('file'), asyncHandler(as
   const io = req.app.get('io');
   const mediaDownloadService = new MediaDownloadService(io);
   
-  // Process and upload file
+  // Create a unique job ID for this upload
+  const jobId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  // Emit initial progress
+  io.to(`user:${req.user.uid}`).emit('upload-progress', {
+    jobId,
+    stage: 'upload',
+    progress: 100,
+    message: 'File uploaded to server',
+    details: `Processing ${req.file.originalname}`
+  });
+  
+  // Process and upload file with progress tracking
   const result = await mediaDownloadService.processDirectUpload({
     file: req.file,
     userId: req.user.uid,
@@ -187,16 +200,29 @@ router.post('/upload', authenticateToken, upload.single('file'), asyncHandler(as
     description,
     visibility: visibility.toUpperCase() as Visibility,
     tags: JSON.parse(tags || '[]'),
+    jobId, // Pass the job ID for tracking
   });
   
   res.json({ 
     success: true, 
     data: {
-      jobId: result.jobId,
+      jobId: result.jobId || jobId,
       mediaItem: result.mediaItem
     },
     message: 'Upload completed successfully!'
   });
+}));
+
+// Cancel an ongoing upload
+router.post('/cancel', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const { jobId } = req.body;
+  if (!jobId) {
+    throw createError('Job ID is required to cancel an upload', 400);
+  }
+
+  uploadCancellationService.cancel(jobId);
+
+  res.json({ success: true, message: `Upload ${jobId} marked for cancellation.` });
 }));
 
 // Get media item by ID
@@ -300,6 +326,10 @@ router.get('/:id/captions', asyncHandler(async (req: AuthenticatedRequest, res) 
 
 // Generate captions for media item
 router.post('/:id/captions/generate', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  // Get Socket.IO instance from app
+  const io = req.app.get('io');
+  const captionServiceWithIo = new CaptionService(io);
+  
   // Ensure user exists and get their database ID
   const dbUserId = await ensureUserExists(req.user.uid, req.user.email, req.user.displayName);
   
@@ -332,8 +362,9 @@ router.post('/:id/captions/generate', authenticateToken, asyncHandler(async (req
       writer.on('error', (err) => reject(err));
     });
     
-    // Generate captions using local file
-    const caption = await captionService.generateCaptions(req.params.id, tempFilePath);
+    // Generate captions using local file with progress tracking
+    const jobId = `caption-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const caption = await captionServiceWithIo.generateCaptions(req.params.id, tempFilePath, req.user.uid, jobId);
     
     // Clean up temp file
     fs.unlinkSync(tempFilePath);

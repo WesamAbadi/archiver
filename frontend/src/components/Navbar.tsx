@@ -1,17 +1,32 @@
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
+import { useUpload } from '../contexts/UploadContext'
 import UploadModal from './UploadModal'
 
 export default function Navbar() {
   const { user, logout } = useAuth()
+  const { isUploading, uploadProgress, showUploadModal, setShowUploadModal } = useUpload()
   const navigate = useNavigate()
-  const [showUploadModal, setShowUploadModal] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
 
   const handleLogout = async () => {
     await logout()
     navigate('/')
+  }
+
+  const getProgressColor = () => {
+    if (uploadProgress.error) return 'bg-red-600'
+    switch (uploadProgress.stage) {
+      case 'upload': return 'bg-blue-600'
+      case 'download': return 'bg-cyan-600'
+      case 'b2': return 'bg-purple-600'
+      case 'gemini': return 'bg-green-600'
+      case 'transcription': return 'bg-yellow-600'
+      case 'complete': return 'bg-emerald-600'
+      default: return 'bg-blue-600'
+    }
   }
 
   return (
@@ -43,12 +58,32 @@ export default function Navbar() {
               <>
                 <button
                   onClick={() => setShowUploadModal(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                  className="relative flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors overflow-hidden"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                  <span className="hidden sm:inline">Upload</span>
+                  <AnimatePresence>
+                    {isUploading && !showUploadModal ? (
+                      <motion.div
+                        initial={{ width: 0, opacity: 0 }}
+                        animate={{ width: '100%', opacity: 1 }}
+                        exit={{ width: 0, opacity: 0 }}
+                        className="absolute inset-0"
+                      >
+                        <div
+                          className={`h-full ${getProgressColor()}`}
+                          style={{ width: `${uploadProgress.progress}%` }}
+                        />
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
+                  
+                  <div className="relative z-10 flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    <span className="hidden sm:inline">
+                      {isUploading ? `Uploading... ${uploadProgress.progress}%` : 'Upload'}
+                    </span>
+                  </div>
                 </button>
 
                 <div className="relative">
@@ -102,9 +137,7 @@ export default function Navbar() {
         </div>
       </nav>
 
-      {showUploadModal && (
-        <UploadModal onClose={() => setShowUploadModal(false)} />
-      )}
+      <UploadModal />
     </>
   )
 } 

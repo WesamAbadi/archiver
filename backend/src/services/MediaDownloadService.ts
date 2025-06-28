@@ -13,16 +13,19 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { spawn } from 'child_process';
+import { uploadCancellationService } from './UploadCancellationService';
 
 export class MediaDownloadService {
-  private backblazeService = new BackblazeService();
+  private backblazeService: BackblazeService;
   private geminiService = new GeminiService();
-  private captionService = new CaptionService();
+  private captionService: CaptionService;
   private io?: any; // Socket.IO instance for progress updates
   private useSoundCloudAlternative = process.env.USE_SOUNDCLOUD_ALTERNATIVE === 'true';
 
   constructor(io?: any) {
     this.io = io;
+    this.backblazeService = new BackblazeService(io); // Pass io to BackblazeService
+    this.captionService = new CaptionService(io); // Pass io to CaptionService
   }
 
   // Helper function to remove undefined values from objects
@@ -84,42 +87,37 @@ export class MediaDownloadService {
     const jobId = uuidv4(); // Generate job ID for progress tracking
     
     try {
-      // Emit initial progress
-      this.emitProgress(params.userId, jobId, 'PENDING', 0, 'Starting download...');
+      this.emitUploadProgress(params.userId, jobId, 'download', 0, 'Starting download...');
       
-      // Ensure user exists and get their database ID
       const dbUserId = await this.ensureUserExists(params.userId);
       
-      this.emitProgress(params.userId, jobId, 'DOWNLOADING', 10, 'Initializing download...');
+      this.emitUploadProgress(params.userId, jobId, 'download', 10, 'Initializing download...');
       
-      console.log(`🚀 Starting download process for: ${params.url} (Platform: ${params.platform})`);
-      
-      // Download media based on platform
       const downloadResult = await this.downloadFromPlatform(params.url, params.platform, (progress, message) => {
-        this.emitProgress(params.userId, jobId, 'DOWNLOADING', 10 + (progress * 0.4), message);
+        this.emitUploadProgress(params.userId, jobId, 'download', 10 + Math.floor(progress * 0.4), message);
       });
       
-      console.log(`✅ Download completed: ${downloadResult.title} (${Math.floor(downloadResult.size / 1024)}KB)`);
+      this.emitUploadProgress(params.userId, jobId, 'b2', 50, 'Uploading to cloud storage...');
       
-      this.emitProgress(params.userId, jobId, 'PROCESSING', 50, 'Uploading to cloud storage...');
-      
-      console.log(`☁️ Starting upload to Backblaze B2`);
-      
-      // Upload to Backblaze B2
       const uploadResult = await this.backblazeService.uploadFile(
         downloadResult.filePath,
         downloadResult.filename,
-        params.userId // Still use OAuth ID for file organization
+        params.userId,
+        jobId
       );
+
+      if (uploadCancellationService.isCancelled(jobId)) {
+        // Cleanup B2 file if upload was cancelled during/after
+        await this.backblazeService.deleteFile(uploadResult.fileId);
+        uploadCancellationService.acknowledge(jobId);
+        throw createError('Upload cancelled by user after cloud upload.', 499);
+      }
       
-      console.log(`✅ Upload to B2 completed successfully`);
+      this.emitUploadProgress(params.userId, jobId, 'gemini', 70, 'Generating AI metadata...');
       
-      this.emitProgress(params.userId, jobId, 'PROCESSING', 70, 'Generating AI metadata...');
-      
-      // Generate AI metadata
       const aiMetadata = await this.geminiService.generateMetadataFromFile(downloadResult.filePath);
       
-      this.emitProgress(params.userId, jobId, 'PROCESSING', 90, 'Finalizing...');
+      this.emitUploadProgress(params.userId, jobId, 'transcription', 90, 'Generating captions...');
       
       // Create media item with flattened metadata structure
       const mediaItemData = {
@@ -176,7 +174,7 @@ export class MediaDownloadService {
       
       if (downloadResult.mimeType.includes('video') || downloadResult.mimeType.includes('audio')) {
         try {
-          await this.captionService.generateCaptions(mediaItem.id, downloadResult.filePath);
+          await this.captionService.generateCaptions(mediaItem.id, downloadResult.filePath, params.userId, jobId);
         } catch (error) {
           console.error('Caption generation failed:', error);
         }
@@ -190,17 +188,13 @@ export class MediaDownloadService {
       // Return serialized media item (converts BigInt to string)
       const serializedMediaItem = this.serializeMediaItem(mediaItem);
       
-      // Emit completion progress
-      this.emitProgress(params.userId, jobId, 'COMPLETED', 100, 'Download completed successfully!', serializedMediaItem);
+      this.emitUploadProgress(params.userId, jobId, 'complete', 100, 'All processing completed!', 'Your media is ready');
       
       return { jobId, mediaItem: serializedMediaItem };
       
     } catch (error) {
       console.error('Download processing error:', error);
-      
-      // Emit error progress
-      this.emitProgress(params.userId, jobId, 'FAILED', 0, (error as Error).message);
-      
+      this.emitUploadProgress(params.userId, jobId, 'error', 100, 'Download failed', (error as Error).message, true);
       throw error;
     }
   }
@@ -1078,29 +1072,39 @@ export class MediaDownloadService {
     description?: string;
     visibility: Visibility;
     tags: string[];
+    jobId?: string; // Add optional jobId parameter
   }): Promise<{ jobId: string; mediaItem: MediaItem }> {
-    const jobId = uuidv4(); // Generate job ID for progress tracking
+    const jobId = params.jobId || uuidv4();
     
     try {
-      // Emit initial progress
-      this.emitProgress(params.userId, jobId, 'PENDING', 0, 'Starting file upload...');
-      
+      if (uploadCancellationService.isCancelled(jobId)) {
+        uploadCancellationService.acknowledge(jobId);
+        throw createError('Upload cancelled by user before start.', 499);
+      }
+
       const dbUserId = await this.ensureUserExists(params.userId);
-      
-      this.emitProgress(params.userId, jobId, 'PROCESSING', 20, 'Uploading to cloud storage...');
       
       const uploadResult = await this.backblazeService.uploadFile(
         params.file.path,
         params.file.originalname,
-        params.userId
+        params.userId,
+        jobId
       );
+
+      if (uploadCancellationService.isCancelled(jobId)) {
+        // Cleanup B2 file
+        await this.backblazeService.deleteFile(uploadResult.fileId);
+        uploadCancellationService.acknowledge(jobId);
+        throw createError('Upload cancelled by user after cloud upload.', 499);
+      }
       
-      this.emitProgress(params.userId, jobId, 'PROCESSING', 60, 'Generating AI metadata...');
+      this.emitUploadProgress(params.userId, jobId, 'gemini', 0, 'Generating AI metadata...');
       
       const aiMetadata = await this.geminiService.generateMetadataFromFile(params.file.path);
       
-      this.emitProgress(params.userId, jobId, 'PROCESSING', 80, 'Saving to database...');
+      this.emitUploadProgress(params.userId, jobId, 'gemini', 100, 'AI metadata generated.');
       
+      // Create media item with flattened metadata structure
       const mediaItemData = {
         id: uuidv4(),
         userId: dbUserId,
@@ -1142,13 +1146,14 @@ export class MediaDownloadService {
         },
       });
       
-      this.emitProgress(params.userId, jobId, 'PROCESSING', 90, 'Generating captions...');
+      this.emitUploadProgress(params.userId, jobId, 'transcription', 90, 'Generating captions...');
       
       if (params.file.mimetype.includes('video') || params.file.mimetype.includes('audio')) {
         try {
-          await this.captionService.generateCaptions(mediaItem.id, params.file.path);
+          await this.captionService.generateCaptions(mediaItem.id, params.file.path, params.userId, jobId);
         } catch (error) {
           console.error('Caption generation failed:', error);
+          this.emitUploadProgress(params.userId, jobId, 'error', 100, 'Caption generation failed', (error as Error).message, true);
         }
       }
       
@@ -1158,13 +1163,15 @@ export class MediaDownloadService {
       
       const serializedMediaItem = this.serializeMediaItem(mediaItem);
       
-      // Emit completion progress
-      this.emitProgress(params.userId, jobId, 'COMPLETED', 100, 'Upload completed successfully!', serializedMediaItem);
+      this.emitUploadProgress(params.userId, jobId, 'complete', 100, 'All processing completed!', 'Your media is ready');
       
       return { jobId, mediaItem: serializedMediaItem };
     } catch (error) {
-      // Emit error progress
-      this.emitProgress(params.userId, jobId, 'FAILED', 0, (error as Error).message);
+      if ((error as any).statusCode === 499) {
+        console.log(`Job ${jobId} was cancelled as requested.`);
+      } else {
+        this.emitUploadProgress(params.userId, jobId, 'error', 100, 'Upload Process Failed', (error as Error).message, true);
+      }
       
       if (fs.existsSync(params.file.path)) {
         fs.unlinkSync(params.file.path);
@@ -1250,8 +1257,8 @@ export class MediaDownloadService {
     });
   }
 
-  // Emit progress update to user via Socket.IO
-  private emitProgress(
+  // Emit progress update to user via Socket.IO for URL downloads
+  private emitDownloadProgress(
     userId: string, 
     jobId: string, 
     status: DownloadStatus, 
@@ -1270,6 +1277,31 @@ export class MediaDownloadService {
     
     if (this.io) {
       this.io.to(`user:${userId}`).emit('download-progress', progressData);
+    }
+  }
+
+  // Emit progress update to user via Socket.IO for uploads
+  private emitUploadProgress(
+    userId: string, 
+    jobId: string, 
+    stage: 'upload' | 'download' | 'b2' | 'gemini' | 'transcription' | 'complete' | 'error', 
+    progress: number, 
+    message: string,
+    details?: string,
+    error?: boolean
+  ): void {
+    const progressData = {
+      jobId,
+      stage,
+      progress,
+      message,
+      details,
+      error,
+      timestamp: new Date().toISOString()
+    };
+    
+    if (this.io) {
+      this.io.to(`user:${userId}`).emit('upload-progress', progressData);
     }
   }
 
