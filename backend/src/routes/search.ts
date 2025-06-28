@@ -1,6 +1,6 @@
 import { Router, Request } from 'express';
 import { SearchService } from '../services/SearchService';
-import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
+import { optionalAuth } from '../middleware/auth';
 import { z } from 'zod';
 
 const router: Router = Router();
@@ -20,7 +20,7 @@ const suggestionsQuerySchema = z.object({
 });
 
 // Search endpoint
-router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
+router.get('/', optionalAuth, async (req: Request, res) => {
   try {
     const { query, limit, offset, includePrivate } = searchQuerySchema.parse({
       query: req.query.q,
@@ -33,8 +33,8 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
       query,
       limit,
       offset,
-      userId: req.user.uid,
-      includePrivate
+      userId: (req as any).user?.uid,
+      includePrivate: includePrivate && (req as any).user?.uid ? true : false
     });
 
     res.json(results);
@@ -49,7 +49,7 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
 });
 
 // Search suggestions endpoint
-router.get('/suggestions', authenticateToken, async (req: AuthenticatedRequest, res) => {
+router.get('/suggestions', optionalAuth, async (req: Request, res) => {
   try {
     const { query, limit } = suggestionsQuerySchema.parse({
       query: req.query.q,

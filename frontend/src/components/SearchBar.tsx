@@ -10,6 +10,7 @@ interface SearchBarProps {
   className?: string;
   placeholder?: string;
   autoFocus?: boolean;
+  initialQuery?: string;
 }
 
 // Helper function to highlight matched text with context
@@ -92,9 +93,10 @@ export function SearchBar({
   onSearch, 
   className = '', 
   placeholder = 'Search media...', 
-  autoFocus = false 
+  autoFocus = false,
+  initialQuery = ''
 }: SearchBarProps) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const [showResults, setShowResults] = useState(false);
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -175,6 +177,11 @@ export function SearchBar({
     };
   }, []);
 
+  // Update query when initialQuery changes
+  useEffect(() => {
+    setQuery(initialQuery);
+  }, [initialQuery]);
+
   return (
     <div ref={searchBarRef} className={`relative ${className}`}>
       <form onSubmit={handleSubmit} className="relative">
@@ -204,7 +211,7 @@ export function SearchBar({
       </form>
 
       {/* Search results dropdown */}
-      {showResults && (query.trim() !== '') && (
+      {showResults && (
         <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg shadow-lg overflow-hidden">
           {/* Loading state */}
           {loading && (
@@ -221,7 +228,7 @@ export function SearchBar({
           )}
 
           {/* Media results */}
-          {searchResults?.items.map((item) => (
+          {searchResults?.items.map(item => (
             <button
               key={item.id}
               onClick={() => handleResultClick(item.id)}

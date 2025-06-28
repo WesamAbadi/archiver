@@ -21,6 +21,7 @@ interface UseSearchResult {
 }
 
 export function useSearch(): UseSearchResult {
+  const { user } = useAuth();
   const [searchResults, setSearchResults] = useState<SearchResult | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,10 +61,14 @@ export function useSearch(): UseSearchResult {
     setCurrentOptions(options);
 
     try {
-      const response = await searchAPI.search({
+      // Only include private results if user is authenticated
+      const searchOptions = {
         q: query,
-        ...options
-      });
+        ...options,
+        includePrivate: user ? options.includePrivate : false
+      };
+
+      const response = await searchAPI.search(searchOptions);
       setSearchResults(response.data);
       
       // Fetch suggestions for the search query
@@ -88,7 +93,8 @@ export function useSearch(): UseSearchResult {
       const response = await searchAPI.search({
         q: currentQuery,
         ...currentOptions,
-        offset: nextOffset
+        offset: nextOffset,
+        includePrivate: user ? currentOptions.includePrivate : false
       });
       
       setSearchResults(prev => ({

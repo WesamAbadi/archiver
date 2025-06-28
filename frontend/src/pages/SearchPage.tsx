@@ -53,7 +53,7 @@ export function SearchPage() {
   return (
     <PageContainer variant="default">
       {/* Search Header */}
-      <div className="relative overflow-hidden">
+      <div className="relative sm:overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-[var(--accent-purple)]/10 via-[var(--accent-blue)]/5 to-transparent"></div>
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-12">
           <div className="flex items-center space-x-3 mb-6">
@@ -70,14 +70,15 @@ export function SearchPage() {
               placeholder="Search by title, description, or captions..."
               className="w-full"
               autoFocus
+              initialQuery={query}
             />
           </div>
         </div>
       </div>
 
-      {/* Search Results */}
+      {/* Search Results or Empty State */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
-        {query && (
+        {query ? (
           <div>
             {/* Results header */}
             <div className="mb-6">
@@ -130,10 +131,7 @@ export function SearchPage() {
               </Card>
             )}
           </div>
-        )}
-
-        {/* Empty state */}
-        {!query && (
+        ) : (
           <Card variant="hover" className="p-8 text-center">
             <Search className="w-12 h-12 mx-auto mb-4 text-[var(--text-muted)]" />
             <p className="text-[var(--text-secondary)]">
