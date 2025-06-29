@@ -1,0 +1,6 @@
+{
+    "rewrites": [{
+        "source": "/api/(.*)",
+        "destination": "https://server.wesamabadi.com/archive/$1"
+    }]
+}
