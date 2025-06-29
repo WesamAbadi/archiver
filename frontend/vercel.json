@@ -4,6 +4,10 @@
             "destination": "https://server.wesamabadi.com/archive/api/$1"
         },
         {
+            "source": "/archive/socket.io/(.*)",
+            "destination": "https://server.wesamabadi.com/archive/socket.io/$1"
+        },
+        {
             "source": "/(.*)",
             "destination": "/index.html"
         }

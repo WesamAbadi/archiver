@@ -356,12 +356,10 @@ Return ONLY valid JSON with the exact format shown above. Remember: convert ALL 
       });
 
       const response = result.text;
-      console.log("🔍 Raw Gemini API response:", response);
 
       let transcriptionData: TranscriptionResponse;
       try {
         transcriptionData = JSON.parse(response);
-        console.log("✅ Successfully parsed JSON:", transcriptionData);
       } catch (parseError) {
         console.error("❌ Failed to parse Gemini response as JSON:", response);
         console.error("Parse error:", parseError);
@@ -559,11 +557,6 @@ Return ONLY valid JSON with the exact format shown above. Remember: convert ALL 
             potentialMinutes * 60 +
             potentialSeconds +
             parseFloat("0." + decimalPart);
-          console.log(
-            `🔧 Converting MM:SS concatenation: ${timestamp} → ${correctedTimestamp} (${potentialMinutes}:${potentialSeconds
-              .toString()
-              .padStart(2, "0")})`
-          );
           return correctedTimestamp;
         }
       }
