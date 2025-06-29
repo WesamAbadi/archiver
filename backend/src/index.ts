@@ -35,7 +35,8 @@ const io = new Server(server, {
   cors: {
     origin: [
       process.env.FRONTEND_URL,
-      /^https:\/\/.*\.nglocalhost\.com$/
+      /^https:\/\/.*\.nglocalhost\.com$/,
+      /^https:\/\/.*\.vercel\.app$/
     ],
     methods: ["GET", "POST"]
   }
@@ -48,7 +49,8 @@ app.use(helmet());
 app.use(cors({
   origin: [
     process.env.FRONTEND_URL,
-    /^https:\/\/.*\.nglocalhost\.com$/
+    /^https:\/\/.*\.nglocalhost\.com$/,
+    /^https:\/\/.*\.vercel\.app$/
   ],
   credentials: true,
 }));
