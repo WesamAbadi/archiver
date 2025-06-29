@@ -30,10 +30,16 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Create socket connection
-    const newSocket = io(import.meta.env.VITE_API_URL || 'http://localhost:3003', {
-      transports: ['websocket'],
-      autoConnect: true,
-    });
+   const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3003";
+   const isDev = import.meta.env.VITE_IS_DEV === "true";
+
+   const newSocket = io(apiUrl, {
+     path: isDev ? "/socket.io/" : "/archive/socket.io/",
+     transports: ["websocket", "polling"],
+     autoConnect: true,
+     upgrade: true,
+     timeout: 20000,
+   });
 
     newSocket.on('connect', () => {
       console.log('Socket connected:', newSocket.id);
