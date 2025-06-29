@@ -36,7 +36,8 @@ const io = new Server(server, {
     origin: [
       process.env.FRONTEND_URL,
       /^https:\/\/.*\.nglocalhost\.com$/,
-      /^https:\/\/.*\.vercel\.app$/
+      /^https:\/\/.*\.vercel\.app$/,
+      "http://localhost:5173"
     ],
     methods: ["GET", "POST"]
   }
@@ -50,7 +51,8 @@ app.use(cors({
   origin: [
     process.env.FRONTEND_URL,
     /^https:\/\/.*\.nglocalhost\.com$/,
-    /^https:\/\/.*\.vercel\.app$/
+    /^https:\/\/.*\.vercel\.app$/,
+    "http://localhost:5173"
   ],
   credentials: true,
 }));
