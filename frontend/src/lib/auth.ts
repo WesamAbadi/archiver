@@ -101,7 +101,7 @@ class AuthService {
       console.log('Received Google credential, sending to backend...');
       
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3003/api';
-      const result = await fetch(`${apiUrl}/auth/google`, {
+      const result = await fetch(`${apiUrl}/api/auth/google`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
