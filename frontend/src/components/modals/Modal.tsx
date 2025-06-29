@@ -44,7 +44,7 @@ export default function Modal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 pb-20 md:pb-4"
           onClick={handleBackdropClick}
         >
           <motion.div
@@ -52,7 +52,7 @@ export default function Modal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ type: 'spring', damping: 25, stiffness: 400 }}
-            className={`bg-gray-900 rounded-2xl w-full ${maxWidthClasses[maxWidth]} border border-gray-800 shadow-2xl max-h-[90vh] overflow-hidden`}
+            className={`bg-gray-900 rounded-2xl w-full ${maxWidthClasses[maxWidth]} border border-gray-800 shadow-2xl max-h-[80vh] md:max-h-[90vh] overflow-hidden`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
@@ -73,7 +73,7 @@ export default function Modal({
             )}
 
             {/* Content */}
-            <div className="overflow-y-auto max-h-[calc(90vh-120px)]">
+            <div className="overflow-y-auto max-h-[calc(80vh-120px)] md:max-h-[calc(90vh-120px)]">
               {children}
             </div>
 

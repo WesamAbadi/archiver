@@ -176,15 +176,47 @@ export default function Navbar() {
           </Link>
 
           {user ? (
-            <Link
-              to="/dashboard"
-              className={`flex flex-col items-center gap-1 px-4 py-2 ${
-                isActive('/dashboard') ? 'text-blue-500' : 'text-gray-400'
-              }`}
-            >
-              <FiUser className="w-6 h-6" />
-              <span className="text-xs">Profile</span>
-            </Link>
+            <div className="relative">
+              <button
+                onClick={() => setShowUserMenu(!showUserMenu)}
+                className={`flex flex-col items-center gap-1 px-4 py-2 ${
+                  isActive('/dashboard') ? 'text-blue-500' : 'text-gray-400'
+                }`}
+              >
+                <FiUser className="w-6 h-6" />
+                <span className="text-xs">Profile</span>
+              </button>
+
+              <AnimatePresence>
+                {showUserMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: -10 }}
+                    exit={{ opacity: 0, y: 0 }}
+                    className="absolute bottom-full right-0 mb-2 w-48 bg-gray-800 rounded-lg shadow-lg py-1 border border-gray-700"
+                  >
+                    <Link
+                      to="/dashboard"
+                      className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
+                    >
+                      Dashboard
+                    </Link>
+                    <Link
+                      to="/settings"
+                      className="block px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
+                    >
+                      Settings
+                    </Link>
+                    <button
+                      onClick={handleLogout}
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
+                    >
+                      Sign out
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           ) : (
             <Link
               to="/login"

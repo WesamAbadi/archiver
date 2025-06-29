@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from 'react-query'
+import { motion, AnimatePresence } from 'framer-motion'
 import { publicAPI } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
 import MediaPlayer, { MediaPlayerRef } from '../components/MediaPlayer'
@@ -34,6 +35,7 @@ import {
 import { formatDistanceToNow } from 'date-fns'
 import toast from 'react-hot-toast'
 import axios from 'axios'
+import Modal from '../components/modals/Modal'
 
 interface Caption {
   id: string;
@@ -96,6 +98,7 @@ export function WatchPage() {
   const [commentTransition, setCommentTransition] = useState(false)
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [showMobileLyrics, setShowMobileLyrics] = useState(true)
+  const [showAllLyricsModal, setShowAllLyricsModal] = useState(false)
   const mediaPlayerRef = useRef<MediaPlayerRef>(null)
   const lyricsContainerRef = useRef<HTMLDivElement>(null)
   const activeLyricRef = useRef<HTMLDivElement>(null)
@@ -243,18 +246,66 @@ export function WatchPage() {
     const currentTimeFixed = Number(currentTime.toFixed(3));
     const caption = captions[0];
     
-    return caption.segments.find((segment) => 
+    // Find the current active segment
+    const activeSegment = caption.segments.find((segment) => 
       currentTimeFixed >= segment.startTime && currentTimeFixed <= segment.endTime
     );
+    
+    if (activeSegment) return activeSegment;
+    
+    // If no active segment, check for seamless transitions (when one ends and next starts at same time)
+    const currentIndex = caption.segments.findIndex((segment) => 
+      currentTimeFixed < segment.startTime
+    );
+    
+    if (currentIndex > 0) {
+      const prevSegment = caption.segments[currentIndex - 1];
+      const nextSegment = caption.segments[currentIndex];
+      
+      // If there's a seamless transition (previous ends where next starts)
+      if (prevSegment.endTime === nextSegment.startTime && 
+          Math.abs(currentTimeFixed - prevSegment.endTime) < 0.1) {
+        return nextSegment; // Show the next segment to avoid flashing
+      }
+    }
+    
+    return null;
   }
 
-  // Check if we're within any caption segment time range
+  // Check if we're within any caption segment time range or in a seamless transition
   const isWithinCaptionRange = () => {
     if (!captions.length) return false;
     const currentTimeFixed = Number(currentTime.toFixed(3));
     const segments = captions[0].segments;
-    return currentTimeFixed >= segments[0].startTime && 
-           currentTimeFixed <= segments[segments.length - 1].endTime;
+    
+    // Check if we're in any segment
+    const inSegment = segments.some(segment => 
+      currentTimeFixed >= segment.startTime && currentTimeFixed <= segment.endTime
+    );
+    
+    if (inSegment) return true;
+    
+    // Check for seamless transitions
+    for (let i = 0; i < segments.length - 1; i++) {
+      const current = segments[i];
+      const next = segments[i + 1];
+      
+      if (current.endTime === next.startTime && 
+          Math.abs(currentTimeFixed - current.endTime) < 0.1) {
+        return true;
+      }
+    }
+    
+    // Add buffer time: if we're within 3 seconds of any segment, keep overlay visible
+    const withinBuffer = segments.some(segment => {
+      const distanceToStart = Math.abs(currentTimeFixed - segment.startTime);
+      const distanceToEnd = Math.abs(currentTimeFixed - segment.endTime);
+      return distanceToStart <= 3 || distanceToEnd <= 3;
+    });
+    
+    if (withinBuffer) return true;
+    
+    return false;
   }
 
   const currentCaption = getCurrentCaption();
@@ -657,29 +708,39 @@ export function WatchPage() {
                   )}
                   
                   {/* Mobile Lyrics Overlay */}
-                  <div className={`lg:hidden absolute inset-0 bg-black/70 backdrop-blur-sm transition-opacity duration-300 ${
+                  <div className={`lg:hidden absolute inset-0 bg-black/70 backdrop-blur-sm transition-all duration-300 ${
                     showMobileLyrics && showingCaptions ? 'opacity-100' : 'opacity-0 pointer-events-none'
                   }`}>
-                    {currentCaption && (
-                      <div className="absolute inset-0 flex flex-col justify-center items-center p-6">
-                        <div className="text-center max-w-full">
-                          <div className="text-xs text-purple-300 mb-3 opacity-80">
-                            {formatTime(currentCaption.startTime)} - {formatTime(currentCaption.endTime)}
-                          </div>
-                          <p 
-                            className={`text-xl md:text-2xl leading-relaxed text-white font-medium bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent transition-all duration-500 ${
-                              isRTL(currentCaption.text) ? 'font-arabic text-right' : 'text-center'
-                            }`}
-                            style={{ 
-                              direction: isRTL(currentCaption.text) ? 'rtl' : 'ltr',
-                              fontFamily: isRTL(currentCaption.text) ? 'Arial, "Noto Sans Arabic", sans-serif' : 'inherit'
-                            }}
-                          >
-                            {currentCaption.text}
-                          </p>
-                        </div>
+                    <div className="absolute inset-0 flex flex-col justify-center items-center p-6">
+                      <div className="text-center max-w-full">
+                        <AnimatePresence mode="wait">
+                          {currentCaption && (
+                            <motion.div
+                              key={currentCaption.id}
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -10 }}
+                              transition={{ duration: 0.3, ease: "easeInOut" }}
+                            >
+                              <div className="text-xs text-purple-300 mb-3 opacity-80">
+                                {formatTime(currentCaption.startTime)} - {formatTime(currentCaption.endTime)}
+                              </div>
+                              <p 
+                                className={`text-xl md:text-2xl leading-relaxed text-white font-medium bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent ${
+                                  isRTL(currentCaption.text) ? 'font-arabic text-right' : 'text-center'
+                                }`}
+                                style={{ 
+                                  direction: isRTL(currentCaption.text) ? 'rtl' : 'ltr',
+                                  fontFamily: isRTL(currentCaption.text) ? 'Arial, "Noto Sans Arabic", sans-serif' : 'inherit'
+                                }}
+                              >
+                                {currentCaption.text}
+                              </p>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
-                    )}
+                    </div>
                   </div>
                   
                   {/* Play/Pause Overlay */}
@@ -698,13 +759,21 @@ export function WatchPage() {
                       
                       {/* Toggle Lyrics Button - Mobile Only */}
                       {captions.length > 0 && (
-                        <button
-                          onClick={() => setShowMobileLyrics(!showMobileLyrics)}
-                          className="lg:hidden px-4 py-2 bg-purple-600/80 backdrop-blur-sm text-white rounded-full text-sm font-medium hover:bg-purple-700/80 transition-all flex items-center space-x-2"
-                        >
-                          <FileText className="w-4 h-4" />
-                          <span>{showMobileLyrics ? 'Hide Lyrics' : 'Show Lyrics'}</span>
-                        </button>
+                        <div className="lg:hidden flex flex-col items-center space-y-2">
+                          <button
+                            onClick={() => setShowMobileLyrics(!showMobileLyrics)}
+                            className="px-4 py-2 bg-purple-600/80 backdrop-blur-sm text-white rounded-full text-sm font-medium hover:bg-purple-700/80 transition-all flex items-center space-x-2"
+                          >
+                            <FileText className="w-4 h-4" />
+                            <span>{showMobileLyrics ? 'Hide Lyrics' : 'Show Lyrics'}</span>
+                          </button>
+                          <button
+                            onClick={() => setShowAllLyricsModal(true)}
+                            className="px-4 py-2 bg-gray-700/80 backdrop-blur-sm text-gray-300 rounded-full text-sm font-medium hover:bg-gray-600/80 transition-all flex items-center space-x-2"
+                          >
+                            <span>View All Lyrics</span>
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -959,6 +1028,53 @@ export function WatchPage() {
           />
         </ErrorBoundary>
       </div>
+
+      {/* All Lyrics Modal */}
+      <Modal
+        isOpen={showAllLyricsModal}
+        onClose={() => setShowAllLyricsModal(false)}
+        title="All Lyrics"
+        maxWidth="md"
+      >
+        <div className="p-6 space-y-6">
+          {captions[0]?.segments.map((segment, index) => {
+            const isActive = currentTime >= segment.startTime && currentTime <= segment.endTime;
+            const isSegmentRTL = isRTL(segment.text);
+            
+            return (
+              <div
+                key={segment.id}
+                className={`transition-all duration-300 ${
+                  isActive ? 'transform scale-105 bg-purple-600/10 p-4 rounded-lg' : ''
+                }`}
+                onClick={() => {
+                  if (mediaPlayerRef.current) {
+                    mediaPlayerRef.current.seekTo(segment.startTime);
+                    setShowAllLyricsModal(false);
+                  }
+                }}
+              >
+                <div className="text-xs text-purple-300 mb-1 opacity-80">
+                  {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
+                </div>
+                <p 
+                  className={`text-lg leading-relaxed transition-all duration-300 ${
+                    isActive 
+                      ? 'text-white font-medium bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent' 
+                      : 'text-gray-300'
+                  } ${isSegmentRTL ? 'font-arabic text-right' : ''}`}
+                  style={{ 
+                    direction: isSegmentRTL ? 'rtl' : 'ltr',
+                    fontFamily: isSegmentRTL ? 'Arial, "Noto Sans Arabic", sans-serif' : 'inherit'
+                  }}
+                >
+                  {segment.text}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </Modal>
 
       {/* Custom Styles */}
       <style>{`
