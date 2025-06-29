@@ -22,6 +22,8 @@ export default defineConfig(({ command, mode }) => {
         ".nglocalhost.com",
         ".ngrok.io",
         ".localtunnel.me",
+        ".vercel.app",
+        "server.wesamabadi.com",
       ],
       proxy: {
         "/api": {
