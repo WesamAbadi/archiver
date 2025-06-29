@@ -708,7 +708,7 @@ export function WatchPage() {
                   )}
                   
                   {/* Mobile Lyrics Overlay */}
-                  <div className={`lg:hidden absolute inset-0 bg-black/70 backdrop-blur-sm transition-all duration-300 ${
+                  <div className={`lg:hidden absolute inset-0 bg-black/70 backdrop-blur-sm transition-all duration-300 rounded-3xl ${
                     showMobileLyrics && showingCaptions ? 'opacity-100' : 'opacity-0 pointer-events-none'
                   }`}>
                     <div className="absolute inset-0 flex flex-col justify-center items-center p-6">

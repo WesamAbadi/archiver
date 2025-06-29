@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
-import { useAuth } from './AuthContext';
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { io, Socket } from "socket.io-client";
+import { useAuth } from "./AuthContext";
 
 interface SocketContextType {
   socket: Socket | null;
@@ -29,30 +29,26 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Create socket connection
+    // Fixed configuration
     const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3003";
     const isDev = import.meta.env.VITE_IS_DEV === "true";
+
+    const baseServerUrl = isDev ? apiUrl : apiUrl.replace("/archive", "");
+
     const socketPath = isDev ? "/socket.io/" : "/archive/socket.io/";
 
-    console.log("Environment check:", {
-      VITE_API_URL: import.meta.env.VITE_API_URL,
-      VITE_IS_DEV: import.meta.env.VITE_IS_DEV,
-      apiUrl,
-      isDev,
+    console.log("Socket connection details:", {
+      baseServerUrl,
       socketPath,
+      fullPath: `${baseServerUrl}${socketPath}`,
     });
 
-    const newSocket = io(apiUrl, {
+    const newSocket = io(baseServerUrl, {
       path: socketPath,
       transports: ["websocket", "polling"],
       autoConnect: true,
       upgrade: true,
       timeout: 20000,
-
-      forceNew: true,
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
     });
 
     // Add more detailed error logging
@@ -95,4 +91,4 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       {children}
     </SocketContext.Provider>
   );
-} 
+}
