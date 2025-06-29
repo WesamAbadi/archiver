@@ -10,6 +10,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { WatchPage } from './pages/WatchPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SearchPage } from './pages/SearchPage';
+import CaptionEditorPage from './pages/CaptionEditorPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
 
@@ -42,6 +43,14 @@ function App() {
                     element={
                       <ProtectedRoute>
                         <DashboardPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/media/:mediaId/captions"
+                    element={
+                      <ProtectedRoute>
+                        <CaptionEditorPage />
                       </ProtectedRoute>
                     }
                   />

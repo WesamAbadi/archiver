@@ -34,14 +34,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     const isDev = import.meta.env.VITE_IS_DEV === "true";
 
     const baseServerUrl = isDev ? apiUrl : apiUrl.replace("/archive", "");
-
     const socketPath = isDev ? "/socket.io/" : "/archive/socket.io/";
-
-    console.log("Socket connection details:", {
-      baseServerUrl,
-      socketPath,
-      fullPath: `${baseServerUrl}${socketPath}`,
-    });
 
     const newSocket = io(baseServerUrl, {
       path: socketPath,

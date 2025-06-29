@@ -7,6 +7,9 @@ import { useSocket } from '../../contexts/SocketContext';
 import { useUpload, UploadProgress } from '../../contexts/UploadContext';
 import Modal from './Modal';
 
+// Use relative URLs - axios will use the current domain
+const API_BASE = '';
+
 export default function UploadModal() {
   const { user, getToken } = useAuth();
   const { socket } = useSocket();
@@ -22,6 +25,7 @@ export default function UploadModal() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const jobIdRef = useRef<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   
   const [file, setFile] = useState<File | null>(null);
   const [url, setUrl] = useState('');
@@ -72,23 +76,28 @@ export default function UploadModal() {
 
   const handleUpload = async () => {
     if (url.trim()) {
-      // URL upload - only need URL
       if (!url) return;
     } else {
-      // File upload - need title and file
       if (!title || !file) return;
     }
     
     startUpload();
     jobIdRef.current = null;
 
+    // Create abort controller for this upload
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     try {
       const token = await getToken();
       let response;
 
       if (url.trim()) {
-        response = await axios.post('/api/media/submit', { url, title, description, visibility, tags }, {
-          headers: { Authorization: `Bearer ${token}` }
+        response = await axios.post(`${API_BASE}/api/media/submit`, { 
+          url, title, description, visibility, tags 
+        }, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: abortController.signal
         });
       } else {
         const formData = new FormData();
@@ -98,8 +107,12 @@ export default function UploadModal() {
         formData.append('visibility', visibility);
         formData.append('tags', JSON.stringify(tags));
 
-        response = await axios.post('/api/media/upload', formData, {
-          headers: { 'Content-Type': 'multipart/form-data', Authorization: `Bearer ${token}` },
+        response = await axios.post(`${API_BASE}/api/media/upload`, formData, {
+          headers: { 
+            'Content-Type': 'multipart/form-data', 
+            Authorization: `Bearer ${token}` 
+          },
+          signal: abortController.signal,
           onUploadProgress: (e) => {
             if (e.total) {
               const progress = Math.round((e.loaded * 100) / e.total);
@@ -119,6 +132,12 @@ export default function UploadModal() {
         jobIdRef.current = response.data.data.jobId;
       }
     } catch (error) {
+      if (axios.isAxiosError(error) && error.code === 'ERR_CANCELED') {
+        // Request was cancelled - this is expected
+        console.log('Upload cancelled by user');
+        return;
+      }
+
       console.error('Upload failed:', error);
       
       let errorMessage = 'Upload failed';
@@ -133,14 +152,16 @@ export default function UploadModal() {
         }
         
         // Handle specific URL validation errors
-        if (errorMessage.includes('SoundCloud download failed') || 
-            errorMessage.includes('Status code 404') ||
-            errorMessage.includes('private or unavailable')) {
-          errorMessage = 'Invalid or unavailable URL';
-          errorDetails = 'The URL you provided is either invalid, private, or the content has been removed';
-        } else if (errorMessage.includes('Download failed')) {
-          errorMessage = 'Unable to download content';
-          errorDetails = 'Please check the URL and try again';
+        if (typeof errorMessage === 'string') {
+          if (errorMessage.includes('SoundCloud download failed') || 
+              errorMessage.includes('Status code 404') ||
+              errorMessage.includes('private or unavailable')) {
+            errorMessage = 'Invalid or unavailable URL';
+            errorDetails = 'The URL you provided is either invalid, private, or the content has been removed';
+          } else if (errorMessage.includes('Download failed')) {
+            errorMessage = 'Unable to download content';
+            errorDetails = 'Please check the URL and try again';
+          }
         }
       } else {
         errorDetails = error instanceof Error ? error.message : String(error);
@@ -153,6 +174,8 @@ export default function UploadModal() {
         details: errorDetails,
         error: true,
       });
+    } finally {
+      abortControllerRef.current = null;
     }
   };
 
@@ -164,29 +187,69 @@ export default function UploadModal() {
   
   const handleDismiss = () => {
     setShowUploadModal(false);
+    resetForm();
+  };
+
+  const resetForm = () => {
+    setFile(null);
+    setUrl('');
+    setTitle('');
+    setDescription('');
+    setVisibility('PUBLIC');
+    setTags([]);
+    setTagInput('');
+    jobIdRef.current = null;
+    if (abortControllerRef.current) {
+      abortControllerRef.current = null;
+    }
   };
   
   const handleCancel = () => {
     if (!isUploading) {
-      setShowUploadModal(false);
+      handleDismiss();
       return;
     }
     setIsCancelling(true);
   };
 
   const confirmCancel = async () => {
-    if (isUploading && jobIdRef.current) {
+    // First, abort the current HTTP request if it's still ongoing
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // Then, send cancellation request to backend if we have a job ID
+    if (jobIdRef.current) {
       try {
         const token = await getToken();
-        await axios.post('/api/media/cancel', { jobId: jobIdRef.current },
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
+        // Use a new abort controller for the cancel request
+        const cancelController = new AbortController();
+        await axios.post(`${API_BASE}/api/media/cancel`, { 
+          jobId: jobIdRef.current 
+        }, { 
+          headers: { Authorization: `Bearer ${token}` },
+          signal: cancelController.signal,
+          timeout: 5000 // 5 second timeout for cancel request
+        });
       } catch (error) {
         console.error('Failed to send cancellation request:', error);
+        // Don't show error to user - cancellation should still proceed
       }
     }
+    
+    // Reset all state
+    setUploadProgress({
+      stage: 'upload',
+      progress: 0,
+      message: 'Upload cancelled',
+      details: '',
+      error: true,
+    });
+    finishUpload();
     setShowUploadModal(false);
     setIsCancelling(false);
+    resetForm();
   };
 
   const getProgressColor = () => {
@@ -250,12 +313,13 @@ export default function UploadModal() {
 
   return (
     <>
-      {/* Cancel Confirmation Modal */}
+      {/* Cancel Confirmation Modal - Higher z-index */}
       <Modal
         isOpen={isCancelling}
         onClose={() => setIsCancelling(false)}
         title="Cancel Upload?"
         maxWidth="sm"
+        className="!z-[60]"
         footer={
           <div className="flex justify-end gap-3">
             <button
@@ -275,7 +339,7 @@ export default function UploadModal() {
       >
         <div className="p-6">
           <p className="text-gray-400">
-            Are you sure you want to cancel this upload? This will stop the current process.
+            Are you sure you want to cancel this upload? This will stop the current process and any files being processed will be cleaned up.
           </p>
         </div>
       </Modal>
@@ -287,6 +351,7 @@ export default function UploadModal() {
         title="Upload Content"
         maxWidth="2xl"
         closeOnBackdrop={!isUploading}
+        className="!z-50"
         footer={footer}
       >
         <form id="upload-form" onSubmit={(e) => { e.preventDefault(); handleUpload(); }} className="p-6 space-y-6">
@@ -319,9 +384,11 @@ export default function UploadModal() {
                     <span>{uploadProgress.progress}%</span>
                   </div>
                   {uploadProgress.stage !== 'upload' && uploadProgress.stage !== 'complete' && !uploadProgress.error && (
-                    <p className="text-center text-xs text-gray-400 mt-3">
-                      Your upload is processing on our servers. You can safely close this window.
-                    </p>
+                    <div className="mt-3 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                      <p className="text-center text-xs text-blue-300">
+                        🚀 Your upload is processing on our servers. You can safely close this window - we'll notify you when it's complete!
+                      </p>
+                    </div>
                   )}
                 </div>
               </motion.div>
