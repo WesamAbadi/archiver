@@ -10,7 +10,6 @@ import { MediaDownloadService } from '../services/MediaDownloadService';
 import { GeminiService } from '../services/GeminiService';
 import { BackblazeService } from '../services/BackblazeService';
 import { CaptionService } from '../services/CaptionService';
-import { CaptionJobService } from '../services/CaptionJobService';
 import { AnalyticsService } from '../services/AnalyticsService';
 import { detectPlatform, validateUrl } from '../utils/urlUtils';
 import { Visibility, Platform } from '../types';
@@ -56,9 +55,6 @@ const geminiService = new GeminiService();
 const backblazeService = new BackblazeService();
 const captionService = new CaptionService();
 const analyticsService = new AnalyticsService();
-
-// Initialize caption job service globally
-let captionJobService: CaptionJobService;
 
 // Get public media items
 router.get('/public', asyncHandler(async (req, res) => {
@@ -686,102 +682,6 @@ router.get('/:id/comments', asyncHandler(async (req: AuthenticatedRequest, res) 
   });
   
   res.json({ success: true, data: comments });
-}));
-
-// Caption Job Queue Management Endpoints
-
-// Get caption queue status for a specific media item
-router.get('/:id/caption-queue-status', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const io = req.app.get('io');
-  if (!captionJobService) {
-    captionJobService = new CaptionJobService(io);
-  }
-  
-  const queueStatus = await captionJobService.getQueueStatus(req.params.id);
-  res.json({ success: true, data: queueStatus });
-}));
-
-// Get user's caption queue status
-router.get('/caption-queue/my-queue', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const io = req.app.get('io');
-  if (!captionJobService) {
-    captionJobService = new CaptionJobService(io);
-  }
-  
-  // Ensure user exists and get their database ID
-  const dbUserId = await ensureUserExists(req.user.uid, req.user.email, req.user.displayName);
-  
-  const userQueue = await captionJobService.getUserQueueStatus(dbUserId);
-  res.json({ success: true, data: userQueue });
-}));
-
-// Cancel a caption job
-router.post('/caption-queue/:jobId/cancel', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const io = req.app.get('io');
-  if (!captionJobService) {
-    captionJobService = new CaptionJobService(io);
-  }
-  
-  // Ensure user exists and get their database ID
-  const dbUserId = await ensureUserExists(req.user.uid, req.user.email, req.user.displayName);
-  
-  const success = await captionJobService.cancelJob(req.params.jobId, dbUserId);
-  
-  if (success) {
-    res.json({ success: true, message: 'Caption job cancelled successfully' });
-  } else {
-    res.status(404).json({ success: false, message: 'Caption job not found or already completed' });
-  }
-}));
-
-// Get caption queue statistics (for admins)
-router.get('/caption-queue/stats', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const io = req.app.get('io');
-  if (!captionJobService) {
-    captionJobService = new CaptionJobService(io);
-  }
-  
-  const stats = await captionJobService.getQueueStats();
-  res.json({ success: true, data: stats });
-}));
-
-// Manually add a media item to caption queue
-router.post('/:id/caption-queue/add', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const io = req.app.get('io');
-  if (!captionJobService) {
-    captionJobService = new CaptionJobService(io);
-  }
-  
-  // Ensure user exists and get their database ID
-  const dbUserId = await ensureUserExists(req.user.uid, req.user.email, req.user.displayName);
-  
-  // Verify the media item belongs to this user
-  const mediaItem = await prisma.mediaItem.findFirst({
-    where: { id: req.params.id, userId: dbUserId },
-    include: { files: true }
-  });
-  
-  if (!mediaItem) {
-    throw createError('Media item not found', 404);
-  }
-  
-  // Check if media item has audio/video files
-  const hasAudioVideo = mediaItem.files.some(file => 
-    file.mimeType.includes('audio') || file.mimeType.includes('video')
-  );
-  
-  if (!hasAudioVideo) {
-    throw createError('Media item does not contain audio or video content', 400);
-  }
-  
-  const { priority = 0 } = req.body;
-  const jobId = await captionJobService.addJob(req.params.id, dbUserId, priority);
-  
-  res.json({ 
-    success: true, 
-    data: { jobId },
-    message: 'Media item added to caption queue'
-  });
 }));
 
 export default router; 

@@ -150,22 +150,6 @@ export const mediaAPI = {
   
   generateMetadata: (id: string) => 
     api.post<APIResponse<any>>(`/media/${id}/generate-metadata`),
-
-  // Caption Queue API
-  getCaptionQueueStatus: (mediaId: string) =>
-    api.get<APIResponse<QueueStatus>>(`/media/${mediaId}/caption-queue-status`),
-  
-  getUserCaptionQueue: () =>
-    api.get<APIResponse<CaptionQueueItem[]>>('/media/caption-queue/my-queue'),
-  
-  cancelCaptionJob: (jobId: string) =>
-    api.post<APIResponse<any>>(`/media/caption-queue/${jobId}/cancel`),
-  
-  getCaptionQueueStats: () =>
-    api.get<APIResponse<CaptionQueueStats>>('/media/caption-queue/stats'),
-  
-  addToCaptionQueue: (mediaId: string, priority?: number) =>
-    api.post<APIResponse<{ jobId: string }>>(`/media/${mediaId}/caption-queue/add`, { priority })
 }
 
 // Archive API (Personal)
@@ -234,37 +218,4 @@ export interface SearchResult {
   items: MediaItem[];
   total: number;
   hasMore: boolean;
-}
-
-// Caption Queue Types
-export interface QueueStatus {
-  position: number;
-  totalJobs: number;
-  estimatedWaitTime: number; // in minutes
-}
-
-export interface CaptionQueueItem {
-  jobId: string;
-  mediaItem: {
-    id: string;
-    title: string;
-    captionStatus: 'PENDING' | 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
-  };
-  status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
-  queuePosition: number;
-  estimatedWaitTime: number;
-  createdAt: string;
-}
-
-export interface CaptionQueueStats {
-  totalJobs: number;
-  queuedJobs: number;
-  processingJobs: number;
-  processedToday: number;
-  dailyLimit: number;
-  rateLimits: {
-    jobsPerMinute: number;
-    jobsPerDay: number;
-  };
-  stats: Record<string, number>;
 } 

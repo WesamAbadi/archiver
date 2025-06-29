@@ -8,6 +8,8 @@ import MediaPlayer, { MediaPlayerRef } from '../components/MediaPlayer'
 import PlyrVideoPlayer from '../components/PlyrVideoPlayer'
 import ErrorBoundary from '../components/ErrorBoundary'
 import { PageContainer, Card, EnhancedCommentSection } from '../components/common'
+import { DynamicBackground } from '../components/DynamicBackground'
+import { useScreenSize } from '../hooks/useScreenSize'
 import { 
   Heart, 
   MessageCircle, 
@@ -86,6 +88,7 @@ export function WatchPage() {
   const { id } = useParams<{ id: string }>()
   const { user, getToken } = useAuth()
   const queryClient = useQueryClient()
+  const { isMobile } = useScreenSize()
   const [comment, setComment] = useState('')
   const [showFullDescription, setShowFullDescription] = useState(false)
   const [mediaItem, setMediaItem] = useState<MediaItem | null>(null)
@@ -109,6 +112,25 @@ export function WatchPage() {
   const lyricsContainerRef = useRef<HTMLDivElement>(null)
   const activeLyricRef = useRef<HTMLDivElement>(null)
 
+  // Get media item with engagement data
+  const { data: mediaData, isLoading, error } = useQuery(
+    ['public-media', id],
+    () => publicAPI.getMediaItem(id!),
+    {
+      enabled: !!id,
+      onSuccess: (data) => {
+        if (data?.data?.success) {
+          const item = data.data.data;
+          setLiked(item.engagement?.isLiked || false);
+          setLikeCount(item.engagement?.likes || item.likeCount || 0);
+        }
+      }
+    }
+  )
+
+  // Get thumbnail URL for dynamic background
+  const thumbnailUrl = mediaData?.data?.data?.thumbnailUrl
+
   // Detect if text is Arabic/RTL
   const isRTL = (text: string) => {
     const arabicRegex = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
@@ -126,22 +148,6 @@ export function WatchPage() {
     
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   }
-
-  // Get media item with engagement data
-  const { data: mediaData, isLoading, error } = useQuery(
-    ['public-media', id],
-    () => publicAPI.getMediaItem(id!),
-    {
-      enabled: !!id,
-      onSuccess: (data) => {
-        if (data?.data?.success) {
-          const item = data.data.data;
-          setLiked(item.engagement?.isLiked || false);
-          setLikeCount(item.engagement?.likes || item.likeCount || 0);
-        }
-      }
-    }
-  )
 
   // Like mutation
   const likeMutation = useMutation(
@@ -464,8 +470,12 @@ export function WatchPage() {
 
   if (isLoading) {
     return (
-      <PageContainer variant="gradient">
-        <div className="flex items-center justify-center min-h-screen">
+      <div className="min-h-screen relative">
+        <DynamicBackground 
+          imageUrl={thumbnailUrl} 
+          variant={isMobile ? 'mobile' : 'desktop'} 
+        />
+        <div className="relative z-10 flex items-center justify-center min-h-screen">
           <div className="text-center">
             <div className="relative">
               <div className="w-16 h-16 border-4 border-purple-600/20 border-t-purple-500 rounded-full animate-spin mx-auto mb-6"></div>
@@ -474,14 +484,18 @@ export function WatchPage() {
             <p className="text-gray-400">Preparing your experience...</p>
           </div>
         </div>
-      </PageContainer>
+      </div>
     )
   }
 
   if (error || !mediaData?.data.success) {
     return (
-      <PageContainer variant="gradient">
-        <div className="flex items-center justify-center min-h-screen">
+      <div className="min-h-screen relative">
+        <DynamicBackground 
+          imageUrl={thumbnailUrl} 
+          variant={isMobile ? 'mobile' : 'desktop'} 
+        />
+        <div className="relative z-10 flex items-center justify-center min-h-screen">
           <div className="text-center">
             <div className="text-6xl mb-4">🎵</div>
             <h1 className="text-2xl font-bold text-white mb-2">Content Not Found</h1>
@@ -492,7 +506,7 @@ export function WatchPage() {
             </Link>
           </div>
         </div>
-      </PageContainer>
+      </div>
     )
   }
 
@@ -503,7 +517,12 @@ export function WatchPage() {
   // Video content with Plyr player
   if (isVideo) {
     return (
-      <PageContainer variant="gradient">
+      <div className="min-h-screen relative">
+        <DynamicBackground 
+          imageUrl={thumbnailUrl} 
+          variant={isMobile ? 'mobile' : 'desktop'} 
+        />
+        
         {/* Navigation */}
         <div className="relative z-10 p-6">
           <Link
@@ -693,29 +712,40 @@ export function WatchPage() {
             </div>
           </div>
         </div>
-      </PageContainer>
+      </div>
     );
   }
 
   // Audio content - use music interface
   if (!isAudio) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-6xl mb-4">📁</div>
-          <h1 className="text-2xl font-bold text-white mb-2">Unsupported Content</h1>
-          <p className="text-gray-400 mb-6">This content type is not supported for playback.</p>
-          <Link to="/" className="px-6 py-3 bg-purple-600 text-white rounded-full hover:bg-purple-700 transition-colors inline-flex items-center">
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Library
-          </Link>
+      <div className="min-h-screen relative">
+        <DynamicBackground 
+          imageUrl={thumbnailUrl} 
+          variant={isMobile ? 'mobile' : 'desktop'} 
+        />
+        <div className="relative z-10 flex items-center justify-center min-h-screen">
+          <div className="text-center">
+            <div className="text-6xl mb-4">📁</div>
+            <h1 className="text-2xl font-bold text-white mb-2">Unsupported Content</h1>
+            <p className="text-gray-400 mb-6">This content type is not supported for playback.</p>
+            <Link to="/" className="px-6 py-3 bg-purple-600 text-white rounded-full hover:bg-purple-700 transition-colors inline-flex items-center">
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back to Library
+            </Link>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <PageContainer variant="gradient">
+    <div className="min-h-screen relative">
+      <DynamicBackground 
+        imageUrl={thumbnailUrl} 
+        variant={isMobile ? 'mobile' : 'desktop'} 
+      />
+      
       {/* Navigation */}
       <div className="relative z-10 p-6">
         <Link 
@@ -1260,6 +1290,6 @@ export function WatchPage() {
           scroll-padding: 50vh;
         }
       `}</style>
-    </PageContainer>
+    </div>
   )
 } 
