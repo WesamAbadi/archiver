@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Globe, Lock, Users, Upload } from 'lucide-react';
+import { Globe, Lock, Users, Upload, Play, ExternalLink } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../contexts/SocketContext';
 import { useUpload, UploadProgress } from '../../contexts/UploadContext';
+import { useQueryClient } from 'react-query';
+import { useLocation } from 'react-router-dom';
 import Modal from './Modal';
 
 // Use relative URLs - axios will use the current domain
@@ -13,6 +15,8 @@ const API_BASE = '';
 export default function UploadModal() {
   const { user, getToken } = useAuth();
   const { socket } = useSocket();
+  const queryClient = useQueryClient();
+  const location = useLocation();
   const {
     isUploading,
     uploadProgress,
@@ -35,16 +39,24 @@ export default function UploadModal() {
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
+  const [uploadedMediaId, setUploadedMediaId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!socket) return;
 
-    const handleUploadProgress = (data: UploadProgress & { jobId: string }) => {
+    const handleUploadProgress = (data: UploadProgress & { jobId: string; mediaId?: string }) => {
       if (isUploading && !jobIdRef.current && data.jobId) {
         jobIdRef.current = data.jobId;
       }
       if (data.jobId === jobIdRef.current) {
         setUploadProgress({ ...data, error: data.error || false });
+        
+        // Capture media ID when upload is complete
+        if (data.stage === 'complete' && data.mediaId) {
+          setUploadedMediaId(data.mediaId);
+          // Invalidate queries to refresh the pages
+          refreshPages();
+        }
       }
     };
 
@@ -53,6 +65,21 @@ export default function UploadModal() {
       socket.off('upload-progress', handleUploadProgress);
     };
   }, [socket, isUploading, setUploadProgress]);
+
+  // Function to refresh page data after upload
+  const refreshPages = () => {
+    // Invalidate relevant queries to refresh the UI
+    queryClient.invalidateQueries(['public-media']);
+    queryClient.invalidateQueries(['user-media']);
+    
+    // If we're on the homepage or dashboard, refetch the data
+    if (location.pathname === '/' || location.pathname === '/dashboard') {
+      // Force refetch for these pages
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('upload-completed'));
+      }, 1000);
+    }
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -81,8 +108,10 @@ export default function UploadModal() {
       if (!title || !file) return;
     }
     
+    // Reset state when starting a new upload
+    handleStartNewUpload();
+    
     startUpload();
-    jobIdRef.current = null;
 
     // Create abort controller for this upload
     const abortController = new AbortController();
@@ -130,6 +159,12 @@ export default function UploadModal() {
 
       if (!jobIdRef.current && response.data?.data?.jobId) {
         jobIdRef.current = response.data.data.jobId;
+      }
+
+      // If immediate response has mediaId, set it
+      if (response.data?.data?.mediaId) {
+        setUploadedMediaId(response.data.data.mediaId);
+        refreshPages();
       }
     } catch (error) {
       if (axios.isAxiosError(error) && error.code === 'ERR_CANCELED') {
@@ -180,13 +215,23 @@ export default function UploadModal() {
   };
 
   useEffect(() => {
-    if (uploadProgress.stage === 'complete' || uploadProgress.error) {
+    // Only trigger completion logic if we're actively uploading
+    if (isUploading && (uploadProgress.stage === 'complete' || uploadProgress.error)) {
       finishUpload();
     }
-  }, [uploadProgress.stage, uploadProgress.error, finishUpload]);
+  }, [uploadProgress.stage, uploadProgress.error, finishUpload, isUploading]);
   
   const handleDismiss = () => {
     setShowUploadModal(false);
+    // Always reset state when closing the modal completely
+    finishUpload();
+    setUploadProgress({
+      stage: 'upload',
+      progress: 0,
+      message: '',
+      details: '',
+      error: false,
+    });
     resetForm();
   };
 
@@ -198,6 +243,7 @@ export default function UploadModal() {
     setVisibility('PUBLIC');
     setTags([]);
     setTagInput('');
+    setUploadedMediaId(null);
     jobIdRef.current = null;
     if (abortControllerRef.current) {
       abortControllerRef.current = null;
@@ -282,34 +328,80 @@ export default function UploadModal() {
 
   const footer = (
     <div className="flex justify-end space-x-3">
-      <button
-        type="button"
-        onClick={handleCancel}
-        className="px-6 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors disabled:opacity-50"
-        disabled={isUploading && uploadProgress.stage === 'complete'}
-      >
-        {isUploading && uploadProgress.stage !== 'complete' ? 'Cancel Upload' : 'Cancel'}
-      </button>
-      <button
-        type="submit"
-        form="upload-form"
-        className="px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 transition-all"
-        disabled={(isUrlMode ? !url.trim() : (!title || !file)) || isUploading}
-      >
-        {isUploading ? (
-          <span className="flex items-center">
-            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            Processing...
-          </span>
-        ) : (
-          'Upload'
-        )}
-      </button>
+      {uploadProgress.stage === 'complete' && uploadedMediaId ? (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              handleStartNewUpload();
+            }}
+            className="px-6 py-2 text-sm font-medium text-gray-300 hover:text-white transition-colors"
+          >
+            Start New Upload
+          </button>
+          <button
+            type="button"
+            onClick={handleDismiss}
+            className="px-6 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors"
+          >
+            Close
+          </button>
+          <a
+            href={`/watch/${uploadedMediaId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 transition-all"
+          >
+            <Play className="w-4 h-4 mr-2" />
+            Watch Now
+            <ExternalLink className="w-4 h-4 ml-2" />
+          </a>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={handleCancel}
+            className="px-6 py-2 text-sm font-medium text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+            disabled={isUploading && uploadProgress.stage === 'complete'}
+          >
+            {isUploading && uploadProgress.stage !== 'complete' ? 'Cancel Upload' : 'Cancel'}
+          </button>
+          <button
+            type="submit"
+            form="upload-form"
+            className="px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 transition-all"
+            disabled={(isUrlMode ? !url.trim() : (!title || !file)) || isUploading}
+          >
+            {isUploading ? (
+              <span className="flex items-center">
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                Processing...
+              </span>
+            ) : (
+              'Upload'
+            )}
+          </button>
+        </>
+      )}
     </div>
   );
+
+  const handleStartNewUpload = () => {
+    // Reset state when starting a new upload
+    setUploadProgress({
+      stage: 'upload',
+      progress: 0,
+      message: '',
+      details: '',
+      error: false,
+    });
+    setUploadedMediaId(null);
+    jobIdRef.current = null;
+  };
 
   return (
     <>

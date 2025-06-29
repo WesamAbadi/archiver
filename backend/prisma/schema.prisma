@@ -30,6 +30,7 @@ model User {
   // Relations
   mediaItems            MediaItem[]
   downloadJobs          DownloadJob[]
+  captionJobs           CaptionJob[]
   likes                 Like[]
   comments              Comment[]
   views                 View[]
@@ -50,6 +51,11 @@ model MediaItem {
   updatedAt         DateTime            @updatedAt
   downloadStatus    DownloadStatus      @default(PENDING)
   publicId          String?             @unique
+  
+  // Caption status tracking
+  captionStatus     CaptionStatus       @default(PENDING)
+  captionErrorMessage String?
+  captionGeneratedAt DateTime?
   
   // Metadata (embedded as JSON for flexibility)
   duration          Int?                // in seconds
@@ -79,6 +85,7 @@ model MediaItem {
   user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   files             MediaFile[]
   downloadJobs      DownloadJob[]
+  captionJobs       CaptionJob[]
   likes             Like[]
   comments          Comment[]
   views             View[]
@@ -86,6 +93,7 @@ model MediaItem {
   
   @@map("media_items")
   @@index([searchVector], type: Gin)
+  @@index([captionStatus, createdAt])
 }
 
 model MediaFile {
@@ -198,6 +206,30 @@ model Comment {
   @@map("comments")
 }
 
+model CaptionJob {
+  id                String              @id @default(cuid())
+  userId            String
+  mediaItemId       String
+  status            CaptionJobStatus    @default(QUEUED)
+  priority          Int                 @default(0) // Higher number = higher priority
+  attempts          Int                 @default(0)
+  maxAttempts       Int                 @default(3)
+  errorMessage      String?
+  processingStartedAt DateTime?
+  completedAt       DateTime?
+  estimatedStartTime DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaItem         MediaItem           @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  
+  @@map("caption_jobs")
+  @@index([status, priority, createdAt])
+  @@index([userId, status])
+}
+
 enum Platform {
   YOUTUBE
   SOUNDCLOUD
@@ -228,4 +260,21 @@ enum SortOrder {
   OLDEST
   TITLE
   POPULAR
+}
+
+enum CaptionStatus {
+  PENDING     // Waiting to be queued
+  QUEUED      // Added to job queue
+  PROCESSING  // Currently being processed
+  COMPLETED   // Successfully generated
+  FAILED      // Failed to generate
+  SKIPPED     // Skipped (e.g., not audio/video content)
+}
+
+enum CaptionJobStatus {
+  QUEUED      // Waiting in queue
+  PROCESSING  // Currently being processed
+  COMPLETED   // Successfully completed
+  FAILED      // Failed after all retries
+  CANCELLED   // Manually cancelled
 } 

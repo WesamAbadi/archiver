@@ -7,6 +7,7 @@ import { MediaItem, DownloadJob, Platform, DownloadStatus, Visibility } from '..
 import { BackblazeService } from './BackblazeService';
 import { GeminiService } from './GeminiService';
 import { CaptionService } from './CaptionService';
+import { CaptionJobService } from './CaptionJobService';
 import { createError } from '../middleware/errorHandler';
 import prisma from '../lib/database';
 import * as path from 'path';
@@ -19,6 +20,7 @@ export class MediaDownloadService {
   private backblazeService: BackblazeService;
   private geminiService = new GeminiService();
   private captionService: CaptionService;
+  private captionJobService: CaptionJobService;
   private io?: any; // Socket.IO instance for progress updates
   private useSoundCloudAlternative = process.env.USE_SOUNDCLOUD_ALTERNATIVE === 'true';
 
@@ -26,6 +28,7 @@ export class MediaDownloadService {
     this.io = io;
     this.backblazeService = new BackblazeService(io); // Pass io to BackblazeService
     this.captionService = new CaptionService(io); // Pass io to CaptionService
+    this.captionJobService = new CaptionJobService(io); // Initialize caption job service
   }
 
   // Helper function to remove undefined values from objects
@@ -117,8 +120,6 @@ export class MediaDownloadService {
       
       const aiMetadata = await this.geminiService.generateMetadataFromFile(downloadResult.filePath);
       
-      this.emitUploadProgress(params.userId, jobId, 'transcription', 90, 'Generating captions...');
-      
       // Create media item with flattened metadata structure
       const mediaItemData = {
         id: uuidv4(),
@@ -146,6 +147,8 @@ export class MediaDownloadService {
         aiSummary: aiMetadata?.summary,
         aiKeywords: aiMetadata?.keywords || [],
         aiGeneratedAt: aiMetadata ? new Date() : undefined,
+        // Caption status - initially pending
+        captionStatus: 'PENDING' as any, // Will be updated by the job queue
       };
 
       const mediaItem = await prisma.mediaItem.create({
@@ -172,12 +175,24 @@ export class MediaDownloadService {
         },
       });
       
+      // Add caption generation job to queue instead of generating directly
       if (downloadResult.mimeType.includes('video') || downloadResult.mimeType.includes('audio')) {
         try {
-          await this.captionService.generateCaptions(mediaItem.id, downloadResult.filePath, params.userId, jobId);
+          this.emitUploadProgress(params.userId, jobId, 'transcription', 90, 'Adding to caption queue...');
+          
+          await this.captionJobService.addJob(mediaItem.id, params.userId, 0);
+          
+          this.emitUploadProgress(params.userId, jobId, 'transcription', 95, 'Added to caption queue', 'Captions will be generated automatically');
         } catch (error) {
-          console.error('Caption generation failed:', error);
+          console.error('Failed to add caption job:', error);
+          // Don't fail the entire upload for caption queue issues
         }
+      } else {
+        // Skip caption generation for non-audio/video content
+        await prisma.mediaItem.update({
+          where: { id: mediaItem.id },
+          data: { captionStatus: 'SKIPPED' as any }
+        });
       }
       
       // Clean up temporary file
@@ -188,7 +203,7 @@ export class MediaDownloadService {
       // Return serialized media item (converts BigInt to string)
       const serializedMediaItem = this.serializeMediaItem(mediaItem);
       
-      this.emitUploadProgress(params.userId, jobId, 'complete', 100, 'All processing completed!', 'Your media is ready');
+      this.emitUploadProgress(params.userId, jobId, 'complete', 100, 'All processing completed!', 'Your media is ready', false, mediaItem.id);
       
       return { jobId, mediaItem: serializedMediaItem };
       
@@ -1121,6 +1136,8 @@ export class MediaDownloadService {
         aiSummary: aiMetadata?.summary,
         aiKeywords: aiMetadata?.keywords || [],
         aiGeneratedAt: aiMetadata ? new Date() : undefined,
+        // Caption status - initially pending
+        captionStatus: 'PENDING' as any,
       };
 
       const mediaItem = await prisma.mediaItem.create({
@@ -1146,15 +1163,24 @@ export class MediaDownloadService {
         },
       });
       
-      this.emitUploadProgress(params.userId, jobId, 'transcription', 90, 'Generating captions...');
-      
+      // Add caption generation job to queue instead of generating directly
       if (params.file.mimetype.includes('video') || params.file.mimetype.includes('audio')) {
         try {
-          await this.captionService.generateCaptions(mediaItem.id, params.file.path, params.userId, jobId);
+          this.emitUploadProgress(params.userId, jobId, 'transcription', 90, 'Adding to caption queue...');
+          
+          await this.captionJobService.addJob(mediaItem.id, params.userId, 0);
+          
+          this.emitUploadProgress(params.userId, jobId, 'transcription', 95, 'Added to caption queue', 'Captions will be generated automatically');
         } catch (error) {
-          console.error('Caption generation failed:', error);
-          this.emitUploadProgress(params.userId, jobId, 'error', 100, 'Caption generation failed', (error as Error).message, true);
+          console.error('Failed to add caption job:', error);
+          // Don't fail the entire upload for caption queue issues
         }
+      } else {
+        // Skip caption generation for non-audio/video content
+        await prisma.mediaItem.update({
+          where: { id: mediaItem.id },
+          data: { captionStatus: 'SKIPPED' as any }
+        });
       }
       
       if (fs.existsSync(params.file.path)) {
@@ -1163,7 +1189,7 @@ export class MediaDownloadService {
       
       const serializedMediaItem = this.serializeMediaItem(mediaItem);
       
-      this.emitUploadProgress(params.userId, jobId, 'complete', 100, 'All processing completed!', 'Your media is ready');
+      this.emitUploadProgress(params.userId, jobId, 'complete', 100, 'All processing completed!', 'Your media is ready', false, mediaItem.id);
       
       return { jobId, mediaItem: serializedMediaItem };
     } catch (error) {
@@ -1288,7 +1314,8 @@ export class MediaDownloadService {
     progress: number, 
     message: string,
     details?: string,
-    error?: boolean
+    error?: boolean,
+    mediaId?: string
   ): void {
     const progressData = {
       jobId,
@@ -1297,6 +1324,7 @@ export class MediaDownloadService {
       message,
       details,
       error,
+      mediaId,
       timestamp: new Date().toISOString()
     };
     

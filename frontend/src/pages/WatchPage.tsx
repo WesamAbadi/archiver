@@ -30,7 +30,10 @@ import {
   Volume2,
   Repeat,
   Shuffle,
-  MoreHorizontal
+  MoreHorizontal,
+  CheckCircle,
+  XCircle,
+  AlertCircle
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -62,6 +65,7 @@ interface MediaItem {
   likeCount: number;
   commentCount: number;
   user: {
+    id: string;
     displayName: string;
     photoURL?: string;
   };
@@ -74,6 +78,8 @@ interface MediaItem {
     comments: number;
     isLiked: boolean;
   };
+  captionStatus?: 'PENDING' | 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
+  captionErrorMessage?: string;
 }
 
 export function WatchPage() {
@@ -307,6 +313,41 @@ export function WatchPage() {
     
     return false;
   }
+
+  // Get caption status icon and text for owner
+  const getCaptionStatusIcon = (status?: string) => {
+    switch (status) {
+      case 'PENDING':
+        return <Clock className="w-4 h-4 text-gray-400" />;
+      case 'QUEUED':
+        return <Clock className="w-4 h-4 text-yellow-400" />;
+      case 'PROCESSING':
+        return <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />;
+      case 'COMPLETED':
+        return <CheckCircle className="w-4 h-4 text-green-400" />;
+      case 'FAILED':
+        return <XCircle className="w-4 h-4 text-red-400" />;
+      case 'SKIPPED':
+        return <AlertCircle className="w-4 h-4 text-gray-400" />;
+      default:
+        return null;
+    }
+  };
+
+  const getCaptionStatusText = (status?: string) => {
+    switch (status) {
+      case 'PENDING': return 'Caption generation pending';
+      case 'QUEUED': return 'Queued for caption generation';
+      case 'PROCESSING': return 'Generating captions...';
+      case 'COMPLETED': return 'Captions available';
+      case 'FAILED': return 'Caption generation failed';
+      case 'SKIPPED': return 'Captions not available (not audio/video)';
+      default: return '';
+    }
+  };
+
+  // Check if current user is the owner
+  const isOwner = user && mediaData?.data?.data?.user?.uid && user.uid === mediaData.data.data.user.uid;
 
   const currentCaption = getCurrentCaption();
   const showingCaptions = isWithinCaptionRange();
@@ -935,7 +976,33 @@ export function WatchPage() {
                 )}
               </div>
 
-              {captions.length > 0 && showCaptions ? (
+              {/* Show caption status if owner and captions aren't ready */}
+              {isOwner && mediaData.data.data.captionStatus && mediaData.data.data.captionStatus !== 'COMPLETED' ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-center max-w-md">
+                    <div className="flex items-center justify-center space-x-3 mb-4">
+                      {getCaptionStatusIcon(mediaData.data.data.captionStatus)}
+                      <span className="text-lg text-gray-300">
+                        {getCaptionStatusText(mediaData.data.data.captionStatus)}
+                      </span>
+                    </div>
+                    
+                    {mediaData.data.data.captionErrorMessage && (
+                      <p className="text-sm text-red-400 mb-4">
+                        {mediaData.data.data.captionErrorMessage}
+                      </p>
+                    )}
+                    
+                    <p className="text-gray-500 text-sm">
+                      {mediaData.data.data.captionStatus === 'PENDING' && 'Captions will be generated automatically'}
+                      {mediaData.data.data.captionStatus === 'QUEUED' && 'Your content is in the caption generation queue'}
+                      {mediaData.data.data.captionStatus === 'PROCESSING' && 'AI is currently transcribing your content'}
+                      {mediaData.data.data.captionStatus === 'FAILED' && 'Caption generation failed. Please try re-uploading the content.'}
+                      {mediaData.data.data.captionStatus === 'SKIPPED' && 'This content type does not support captions'}
+                    </p>
+                  </div>
+                </div>
+              ) : captions.length > 0 && showCaptions ? (
                 <div 
                   ref={lyricsContainerRef}
                   className="hidden lg:block flex-1 overflow-y-auto space-y-6 max-h-96 pr-4 custom-scrollbar scroll-smooth"

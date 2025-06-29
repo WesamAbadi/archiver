@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Globe, Lock, Users, Calendar, Eye, MessageCircle, Heart, X, FileText, MoreVertical, Edit } from 'lucide-react';
+import { Globe, Lock, Users, Calendar, Eye, MessageCircle, Heart, X, FileText, MoreVertical, Edit, Clock, CheckCircle, XCircle, AlertCircle, Loader2 } from 'lucide-react';
 import EditMediaModal from '../components/modals/EditMediaModal';
 
 interface MediaItem {
@@ -18,6 +18,7 @@ interface MediaItem {
   createdAt: string;
   duration?: number;
   platform: string;
+  captionStatus?: 'PENDING' | 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
   files?: Array<{
     id: string;
     downloadUrl: string;
@@ -35,12 +36,9 @@ export function DashboardPage() {
   const [activeTab, setActiveTab] = useState('content');
   const [editingMedia, setEditingMedia] = useState<MediaItem | null>(null);
 
-  useEffect(() => {
-    fetchMediaItems();
-  }, []);
-
-  const fetchMediaItems = async () => {
+  const fetchMediaItems = useCallback(async () => {
     try {
+      setLoading(true);
       const token = await getToken();
       const response = await axios.get('/api/media', {
         headers: { Authorization: `Bearer ${token}` }
@@ -52,7 +50,23 @@ export function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [getToken]);
+
+  useEffect(() => {
+    fetchMediaItems();
+  }, [fetchMediaItems]);
+
+  // Listen for upload completion events
+  useEffect(() => {
+    const handleUploadCompleted = () => {
+      fetchMediaItems();
+    };
+
+    window.addEventListener('upload-completed', handleUploadCompleted);
+    return () => {
+      window.removeEventListener('upload-completed', handleUploadCompleted);
+    };
+  }, [fetchMediaItems]);
 
   const handleUpdateMedia = async (id: string, updates: Partial<MediaItem>) => {
     try {
@@ -110,6 +124,38 @@ export function DashboardPage() {
 
   const handleEditCaptions = (item: MediaItem) => {
     navigate(`/media/${item.id}/captions`);
+  };
+
+  // Get caption status icon and color
+  const getCaptionStatusIcon = (status?: string) => {
+    switch (status) {
+      case 'PENDING':
+        return <span title="Pending caption generation"><Clock className="w-4 h-4 text-gray-400" /></span>;
+      case 'QUEUED':
+        return <span title="Queued for caption generation"><Clock className="w-4 h-4 text-yellow-400" /></span>;
+      case 'PROCESSING':
+        return <span title="Generating captions..."><Loader2 className="w-4 h-4 text-blue-400 animate-spin" /></span>;
+      case 'COMPLETED':
+        return <span title="Captions available"><CheckCircle className="w-4 h-4 text-green-400" /></span>;
+      case 'FAILED':
+        return <span title="Caption generation failed"><XCircle className="w-4 h-4 text-red-400" /></span>;
+      case 'SKIPPED':
+        return <span title="No captions (not audio/video)"><AlertCircle className="w-4 h-4 text-gray-400" /></span>;
+      default:
+        return null;
+    }
+  };
+
+  const getCaptionStatusText = (status?: string) => {
+    switch (status) {
+      case 'PENDING': return 'Pending';
+      case 'QUEUED': return 'Queued';
+      case 'PROCESSING': return 'Processing';
+      case 'COMPLETED': return 'Ready';
+      case 'FAILED': return 'Failed';
+      case 'SKIPPED': return 'N/A';
+      default: return 'Unknown';
+    }
   };
 
   return (
@@ -232,18 +278,28 @@ export function DashboardPage() {
                             <span>{formatDate(item.createdAt)}</span>
                           </div>
                           
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                            item.visibility === 'PUBLIC'
-                              ? 'bg-green-500/20 text-green-400'
-                              : item.visibility === 'UNLISTED'
-                              ? 'bg-yellow-500/20 text-yellow-400'
-                              : 'bg-gray-500/20 text-gray-400'
-                          }`}>
-                            {item.visibility === 'PUBLIC' && <Globe className="w-2 h-2 mr-1" />}
-                            {item.visibility === 'UNLISTED' && <Users className="w-2 h-2 mr-1" />}
-                            {item.visibility === 'PRIVATE' && <Lock className="w-2 h-2 mr-1" />}
-                            {item.visibility.toLowerCase()}
-                          </span>
+                          <div className="flex items-center space-x-2">
+                            {/* Caption Status */}
+                            <div className="flex items-center space-x-1">
+                              {getCaptionStatusIcon(item.captionStatus)}
+                              <span className="text-xs text-gray-400">
+                                {getCaptionStatusText(item.captionStatus)}
+                              </span>
+                            </div>
+                            
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                              item.visibility === 'PUBLIC'
+                                ? 'bg-green-500/20 text-green-400'
+                                : item.visibility === 'UNLISTED'
+                                ? 'bg-yellow-500/20 text-yellow-400'
+                                : 'bg-gray-500/20 text-gray-400'
+                            }`}>
+                              {item.visibility === 'PUBLIC' && <Globe className="w-2 h-2 mr-1" />}
+                              {item.visibility === 'UNLISTED' && <Users className="w-2 h-2 mr-1" />}
+                              {item.visibility === 'PRIVATE' && <Lock className="w-2 h-2 mr-1" />}
+                              {item.visibility.toLowerCase()}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -269,6 +325,9 @@ export function DashboardPage() {
                       </th>
                       <th className="px-4 lg:px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider hidden md:table-cell">
                         Visibility
+                      </th>
+                      <th className="px-4 lg:px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider hidden lg:table-cell">
+                        Captions
                       </th>
                       <th className="px-4 lg:px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider hidden xl:table-cell">
                         Date
@@ -372,6 +431,14 @@ export function DashboardPage() {
                             {item.visibility === 'PRIVATE' && <Lock className="w-3 h-3 mr-1" />}
                             {item.visibility.toLowerCase()}
                           </span>
+                        </td>
+                        <td className="px-4 lg:px-6 py-4 hidden lg:table-cell">
+                          <div className="flex items-center space-x-2">
+                            {getCaptionStatusIcon(item.captionStatus)}
+                            <span className="text-sm text-gray-300">
+                              {getCaptionStatusText(item.captionStatus)}
+                            </span>
+                          </div>
                         </td>
                         <td className="px-4 lg:px-6 py-4 text-sm text-gray-300 hidden xl:table-cell">
                           {formatDate(item.createdAt)}

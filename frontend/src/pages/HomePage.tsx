@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
@@ -24,12 +24,9 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState('all');
 
-  useEffect(() => {
-    fetchMediaItems();
-  }, [activeFilter]);
-
-  const fetchMediaItems = async () => {
+  const fetchMediaItems = useCallback(async () => {
     try {
+      setLoading(true);
       const response = await axios.get('/api/media/public', {
         params: { filter: activeFilter }
       });
@@ -39,7 +36,23 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeFilter]);
+
+  useEffect(() => {
+    fetchMediaItems();
+  }, [fetchMediaItems]);
+
+  // Listen for upload completion events
+  useEffect(() => {
+    const handleUploadCompleted = () => {
+      fetchMediaItems();
+    };
+
+    window.addEventListener('upload-completed', handleUploadCompleted);
+    return () => {
+      window.removeEventListener('upload-completed', handleUploadCompleted);
+    };
+  }, [fetchMediaItems]);
 
   const formatDuration = (seconds?: number) => {
     if (!seconds) return '';
