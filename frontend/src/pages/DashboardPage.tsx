@@ -19,6 +19,7 @@ interface MediaItem {
   duration?: number;
   platform: string;
   captionStatus?: 'PENDING' | 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
+  tags: string[];
   files?: Array<{
     id: string;
     downloadUrl: string;
