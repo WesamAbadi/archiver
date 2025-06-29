@@ -68,6 +68,35 @@ router.get('/public/:userId', asyncHandler(async (req, res) => {
   res.json({ success: true, data: user });
 }));
 
+// Helper function to check storage limit
+async function checkStorageLimit(userId: string): Promise<{ hasSpace: boolean; currentUsage: number; limit: number }> {
+  const user = await prisma.user.findUnique({
+    where: { uid: userId },
+    include: {
+      mediaItems: {
+        select: {
+          size: true,
+        },
+      },
+    },
+  });
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  const storageUsed = user.mediaItems.reduce((sum, item) => {
+    return sum + Number(item.size);
+  }, 0);
+
+  const storageLimit = 1 * 1024 * 1024 * 1024; // 1GB in bytes
+  return {
+    hasSpace: storageUsed < storageLimit,
+    currentUsage: storageUsed,
+    limit: storageLimit
+  };
+}
+
 // Get user usage statistics
 router.get('/usage', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
   const user = await prisma.user.findUnique({
@@ -107,11 +136,13 @@ router.get('/usage', authenticateToken, asyncHandler(async (req: AuthenticatedRe
     totalSize,
     recentDownloads,
     storageUsed: totalSize,
-    // Add storage limits based on your pricing model
-    storageLimit: 10 * 1024 * 1024 * 1024, // 10GB default
+    storageLimit: 1 * 1024 * 1024 * 1024, // 1GB limit
   };
   
   res.json({ success: true, data: usage });
 }));
+
+// Export the helper function
+export { checkStorageLimit };
 
 export default router; 

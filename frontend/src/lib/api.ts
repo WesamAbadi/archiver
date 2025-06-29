@@ -171,7 +171,20 @@ export const publicAPI = {
     page?: number; 
     limit?: number; 
     type?: 'all' | 'video' | 'audio' | 'image';
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+    tag?: string;
   }) => api.get('/archive/feed', { params }),
+  
+  // Get public media items with sorting
+  getPublicMedia: (params?: {
+    page?: number;
+    limit?: number;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+    tag?: string;
+    filter?: string;
+  }) => api.get('/media/public', { params }),
   
   // Get trending content
   getTrending: (params?: { 
@@ -190,6 +203,11 @@ export const publicAPI = {
   // Add comment
   addComment: (id: string, content: string) => 
     api.post(`/archive/media/${id}/comment`, { content }),
+
+  // Get popular tags
+  getPopularTags: (params?: {
+    random?: number;
+  }) => api.get('/media/popular-tags', { params }),
 }
 
 // User API

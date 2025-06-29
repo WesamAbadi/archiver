@@ -31,29 +31,38 @@ export default function UploadModal() {
   const jobIdRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   
-  const [file, setFile] = useState<File | null>(null);
-  const [url, setUrl] = useState('');
+  // Updated state for multiple uploads
+  const [files, setFiles] = useState<File[]>([]);
+  const [urls, setUrls] = useState<string[]>(['']);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<'PRIVATE' | 'PUBLIC' | 'UNLISTED'>('PUBLIC');
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
   const [isCancelling, setIsCancelling] = useState(false);
-  const [uploadedMediaId, setUploadedMediaId] = useState<string | null>(null);
+  const [uploadedMediaIds, setUploadedMediaIds] = useState<string[]>([]);
+  const [batchProgress, setBatchProgress] = useState<{ [key: string]: any }>({});
+  const [isMultiMode, setIsMultiMode] = useState(false);
 
   useEffect(() => {
     if (!socket) return;
 
     const handleUploadProgress = (data: UploadProgress & { jobId: string; mediaId?: string }) => {
-      if (isUploading && !jobIdRef.current && data.jobId) {
-        jobIdRef.current = data.jobId;
-      }
-      if (data.jobId === jobIdRef.current) {
-        setUploadProgress({ ...data, error: data.error || false });
+      if (isUploading) {
+        // Handle batch progress
+        setBatchProgress(prev => ({
+          ...prev,
+          [data.jobId]: data
+        }));
+
+        // Update overall progress for single uploads or last item in batch
+        if (!isMultiMode || Object.keys(batchProgress).length === 1) {
+          setUploadProgress({ ...data, error: data.error || false });
+        }
         
         // Capture media ID when upload is complete
         if (data.stage === 'complete' && data.mediaId) {
-          setUploadedMediaId(data.mediaId);
+          setUploadedMediaIds(prev => [...prev, data.mediaId!]);
           // Invalidate queries to refresh the pages
           refreshPages();
         }
@@ -64,7 +73,7 @@ export default function UploadModal() {
     return () => {
       socket.off('upload-progress', handleUploadProgress);
     };
-  }, [socket, isUploading, setUploadProgress]);
+  }, [socket, isUploading, setUploadProgress, isMultiMode, batchProgress]);
 
   // Function to refresh page data after upload
   const refreshPages = () => {
@@ -82,10 +91,45 @@ export default function UploadModal() {
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0];
-      setFile(selectedFile);
-      setTitle(selectedFile.name.replace(/\.[^/.]+$/, ''));
+    if (e.target.files) {
+      const selectedFiles = Array.from(e.target.files);
+      setFiles(selectedFiles);
+      
+      // Auto-generate titles from filenames for multiple files
+      if (selectedFiles.length === 1) {
+        setTitle(selectedFiles[0].name.replace(/\.[^/.]+$/, ''));
+      } else {
+        setTitle(''); // Clear title for batch uploads - will use individual filenames
+      }
+      
+      setIsMultiMode(selectedFiles.length > 1);
+    }
+  };
+
+  const handleUrlChange = (index: number, value: string) => {
+    const newUrls = [...urls];
+    newUrls[index] = value;
+    setUrls(newUrls);
+    
+    // Add new URL input if this is the last one and has content
+    if (index === urls.length - 1 && value.trim()) {
+      setUrls([...newUrls, '']);
+    }
+    
+    // Remove empty URLs except the last one
+    if (!value.trim() && index < urls.length - 1) {
+      setUrls(newUrls.filter((_, i) => i !== index));
+    }
+    
+    const nonEmptyUrls = newUrls.filter(url => url.trim());
+    setIsMultiMode(nonEmptyUrls.length > 1);
+  };
+
+  const removeUrl = (index: number) => {
+    if (urls.length > 1) {
+      const newUrls = urls.filter((_, i) => i !== index);
+      setUrls(newUrls.length === 0 ? [''] : newUrls);
+      setIsMultiMode(newUrls.filter(url => url.trim()).length > 1);
     }
   };
 
@@ -102,73 +146,36 @@ export default function UploadModal() {
   };
 
   const handleUpload = async () => {
-    if (url.trim()) {
-      if (!url) return;
-    } else {
-      if (!title || !file) return;
+    const nonEmptyUrls = urls.filter(url => url.trim());
+    const hasUrls = nonEmptyUrls.length > 0;
+    const hasFiles = files.length > 0;
+    
+    if (!hasUrls && !hasFiles) return;
+    if (hasUrls && hasFiles) {
+      alert('Please upload either files OR URLs, not both at the same time.');
+      return;
     }
     
     // Reset state when starting a new upload
     handleStartNewUpload();
+    setBatchProgress({});
+    setUploadedMediaIds([]);
     
     startUpload();
 
-    // Create abort controller for this upload
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
     try {
       const token = await getToken();
-      let response;
 
-      if (url.trim()) {
-        response = await axios.post(`${API_BASE}/api/media/submit`, { 
-          url, title, description, visibility, tags 
-        }, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: abortController.signal
-        });
+      if (hasUrls) {
+        // Batch URL uploads
+        await handleBatchUrlUpload(nonEmptyUrls, token);
       } else {
-        const formData = new FormData();
-        formData.append('file', file!);
-        formData.append('title', title);
-        formData.append('description', description);
-        formData.append('visibility', visibility);
-        formData.append('tags', JSON.stringify(tags));
-
-        response = await axios.post(`${API_BASE}/api/media/upload`, formData, {
-          headers: { 
-            'Content-Type': 'multipart/form-data', 
-            Authorization: `Bearer ${token}` 
-          },
-          signal: abortController.signal,
-          onUploadProgress: (e) => {
-            if (e.total) {
-              const progress = Math.round((e.loaded * 100) / e.total);
-              setUploadProgress((prev) => ({
-                ...prev,
-                stage: 'upload',
-                progress,
-                message: `Uploading to server... ${progress}%`,
-                details: `${(e.loaded / 1024 / 1024).toFixed(2)}MB / ${(e.total / 1024 / 1024).toFixed(2)}MB`,
-              }));
-            }
-          }
-        });
+        // Batch file uploads
+        await handleBatchFileUpload(files, token);
       }
 
-      if (!jobIdRef.current && response.data?.data?.jobId) {
-        jobIdRef.current = response.data.data.jobId;
-      }
-
-      // If immediate response has mediaId, set it
-      if (response.data?.data?.mediaId) {
-        setUploadedMediaId(response.data.data.mediaId);
-        refreshPages();
-      }
     } catch (error) {
       if (axios.isAxiosError(error) && error.code === 'ERR_CANCELED') {
-        // Request was cancelled - this is expected
         console.log('Upload cancelled by user');
         return;
       }
@@ -186,16 +193,18 @@ export default function UploadModal() {
           errorMessage = responseData.error;
         }
         
-        // Handle specific URL validation errors
         if (typeof errorMessage === 'string') {
-          if (errorMessage.includes('SoundCloud download failed') || 
+          if (errorMessage.includes('Storage limit reached') || error.response.status === 413) {
+            errorMessage = 'Storage limit reached';
+            errorDetails = 'Please free up space by deleting some files before uploading.';
+          } else if (errorMessage.includes('SoundCloud download failed') || 
               errorMessage.includes('Status code 404') ||
               errorMessage.includes('private or unavailable')) {
             errorMessage = 'Invalid or unavailable URL';
-            errorDetails = 'The URL you provided is either invalid, private, or the content has been removed';
+            errorDetails = 'One or more URLs are invalid, private, or the content has been removed';
           } else if (errorMessage.includes('Download failed')) {
             errorMessage = 'Unable to download content';
-            errorDetails = 'Please check the URL and try again';
+            errorDetails = 'Please check the URLs and try again';
           }
         }
       } else {
@@ -209,8 +218,73 @@ export default function UploadModal() {
         details: errorDetails,
         error: true,
       });
-    } finally {
-      abortControllerRef.current = null;
+    }
+  };
+
+  const handleBatchUrlUpload = async (urlList: string[], token: string) => {
+    try {
+      // Create abort controller for batch upload
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+
+      const response = await axios.post(`${API_BASE}/api/media/batch-submit`, { 
+        urls: urlList,
+        description: isMultiMode ? '' : description, 
+        visibility, 
+        tags: isMultiMode ? [] : tags
+      }, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: abortController.signal
+      });
+
+      return response.data?.data;
+    } catch (error) {
+      console.error('Failed to start batch URL upload:', error);
+      throw error;
+    }
+  };
+
+  const handleBatchFileUpload = async (fileList: File[], token: string) => {
+    try {
+      // Create abort controller for batch upload
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+
+      const formData = new FormData();
+      
+      // Append all files
+      fileList.forEach((file, index) => {
+        formData.append('files', file);
+      });
+      
+      formData.append('description', isMultiMode ? '' : description);
+      formData.append('visibility', visibility);
+      formData.append('tags', JSON.stringify(isMultiMode ? [] : tags));
+
+      const response = await axios.post(`${API_BASE}/api/media/batch-upload`, formData, {
+        headers: { 
+          'Content-Type': 'multipart/form-data', 
+          Authorization: `Bearer ${token}` 
+        },
+        signal: abortController.signal,
+        onUploadProgress: (e) => {
+          if (e.total && !isMultiMode) { // Only show detailed progress for single uploads
+            const progress = Math.round((e.loaded * 100) / e.total);
+            setUploadProgress((prev) => ({
+              ...prev,
+              stage: 'upload',
+              progress,
+              message: `Uploading to server... ${progress}%`,
+              details: `${(e.loaded / 1024 / 1024).toFixed(2)}MB / ${(e.total / 1024 / 1024).toFixed(2)}MB`,
+            }));
+          }
+        }
+      });
+
+      return response.data?.data;
+    } catch (error) {
+      console.error('Failed to start batch file upload:', error);
+      throw error;
     }
   };
 
@@ -236,14 +310,16 @@ export default function UploadModal() {
   };
 
   const resetForm = () => {
-    setFile(null);
-    setUrl('');
+    setFiles([]);
+    setUrls(['']);
     setTitle('');
     setDescription('');
     setVisibility('PUBLIC');
     setTags([]);
     setTagInput('');
-    setUploadedMediaId(null);
+    setUploadedMediaIds([]);
+    setBatchProgress({});
+    setIsMultiMode(false);
     jobIdRef.current = null;
     if (abortControllerRef.current) {
       abortControllerRef.current = null;
@@ -324,11 +400,12 @@ export default function UploadModal() {
     }
   };
 
-  const isUrlMode = url.trim().length > 0;
+  const isUrlMode = urls.some(url => url.trim().length > 0);
+  const hasCompletedUploads = uploadedMediaIds.length > 0;
 
   const footer = (
     <div className="flex justify-end space-x-3">
-      {uploadProgress.stage === 'complete' && uploadedMediaId ? (
+      {hasCompletedUploads ? (
         <>
           <button
             type="button"
@@ -346,16 +423,26 @@ export default function UploadModal() {
           >
             Close
           </button>
-          <a
-            href={`/watch/${uploadedMediaId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 transition-all"
-          >
-            <Play className="w-4 h-4 mr-2" />
-            Watch Now
-            <ExternalLink className="w-4 h-4 ml-2" />
-          </a>
+          {uploadedMediaIds.length === 1 ? (
+            <a
+              href={`/watch/${uploadedMediaIds[0]}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 transition-all"
+            >
+              <Play className="w-4 h-4 mr-2" />
+              Watch Now
+              <ExternalLink className="w-4 h-4 ml-2" />
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={handleDismiss}
+              className="inline-flex items-center px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 transition-all"
+            >
+              View Uploads ({uploadedMediaIds.length})
+            </button>
+          )}
         </>
       ) : (
         <>
@@ -371,7 +458,7 @@ export default function UploadModal() {
             type="submit"
             form="upload-form"
             className="px-6 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 transition-all"
-            disabled={(isUrlMode ? !url.trim() : (!title || !file)) || isUploading}
+            disabled={(isUrlMode ? !urls.some(url => url.trim()) : (!title && !isMultiMode) || files.length === 0) || isUploading}
           >
             {isUploading ? (
               <span className="flex items-center">
@@ -382,7 +469,7 @@ export default function UploadModal() {
                 Processing...
               </span>
             ) : (
-              'Upload'
+              `Upload${isMultiMode ? ` (${files.length || urls.filter(url => url.trim()).length})` : ''}`
             )}
           </button>
         </>
@@ -399,8 +486,82 @@ export default function UploadModal() {
       details: '',
       error: false,
     });
-    setUploadedMediaId(null);
+    setUploadedMediaIds([]);
+    setBatchProgress({});
     jobIdRef.current = null;
+  };
+
+  const handleMultipleUploads = async () => {
+    // Implementation of handleMultipleUploads
+    // This function should return a Promise that resolves when all uploads are complete
+    // and returns an array of media IDs
+    // For now, we'll keep it simple and return an empty array
+    return [];
+  };
+
+  // Add storage limit warning
+  const showStorageLimitWarning = (totalSize: number) => {
+    const GB = 1024 * 1024 * 1024;
+    const warningThreshold = 0.8 * GB; // 80% of 1GB
+    
+    if (totalSize > GB) {
+      return (
+        <div className="mt-3 p-3 bg-red-900/20 border border-red-500/30 rounded-lg">
+          <p className="text-center text-xs text-red-300">
+            ⚠️ Total size ({(totalSize / (1024 * 1024)).toFixed(2)}MB) exceeds the 1GB storage limit
+          </p>
+        </div>
+      );
+    } else if (totalSize > warningThreshold) {
+      return (
+        <div className="mt-3 p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-lg">
+          <p className="text-center text-xs text-yellow-300">
+            ⚠️ Total size ({(totalSize / (1024 * 1024)).toFixed(2)}MB) is close to the 1GB storage limit
+          </p>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // Update file display section to include storage warning
+  const renderFileSection = () => {
+    if (files.length === 0) return null;
+    
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+    
+    return (
+      <>
+        {files.length === 1 ? (
+          <div className="space-y-2">
+            <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl mx-auto flex items-center justify-center">
+              <Upload className="w-8 h-8 text-white" />
+            </div>
+            <p className="text-white font-medium">{files[0].name}</p>
+            <p className="text-gray-400 text-sm">{(files[0].size / 1024 / 1024).toFixed(2)} MB</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl mx-auto flex items-center justify-center">
+              <Upload className="w-8 h-8 text-white" />
+            </div>
+            <p className="text-white font-medium">{files.length} files selected</p>
+            <div className="max-h-32 overflow-y-auto space-y-1">
+              {files.map((file, index) => (
+                <div key={index} className="flex items-center justify-between text-sm bg-gray-800/50 rounded px-3 py-2">
+                  <span className="text-gray-300 truncate flex-1">{file.name}</span>
+                  <span className="text-gray-400 ml-2">{(file.size / 1024 / 1024).toFixed(1)}MB</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-gray-400 text-sm">
+              Total: {(totalSize / 1024 / 1024).toFixed(2)} MB
+            </p>
+          </div>
+        )}
+        {showStorageLimitWarning(totalSize)}
+      </>
+    );
   };
 
   return (
@@ -497,15 +658,35 @@ export default function UploadModal() {
                 {/* URL Input */}
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">
-                    Import from URL
+                    Import from URL{urls.filter(url => url.trim()).length > 1 ? 's' : ''}
                   </label>
-                  <input
-                    type="text"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="Paste YouTube, SoundCloud, or Twitter URL"
-                    className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
-                  />
+                  <div className="space-y-3">
+                    {urls.map((url, index) => (
+                      <div key={index} className="flex gap-2">
+                        <input
+                          type="text"
+                          value={url}
+                          onChange={(e) => handleUrlChange(index, e.target.value)}
+                          placeholder={index === 0 ? "Paste YouTube, SoundCloud, or Twitter URL" : "Add another URL..."}
+                          className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
+                        />
+                        {urls.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeUrl(index)}
+                            className="px-3 py-3 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded-xl transition-colors"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {urls.filter(url => url.trim()).length > 1 && (
+                    <p className="text-xs text-gray-500 mt-2">
+                      Processing {urls.filter(url => url.trim()).length} URLs. Titles will be auto-generated from content.
+                    </p>
+                  )}
                 </div>
 
                 {/* OR Divider - only show when no URL */}
@@ -548,60 +729,74 @@ export default function UploadModal() {
                           onChange={handleFileSelect}
                           className="hidden"
                           accept="video/*,audio/*,image/*"
+                          multiple
                         />
-                        {file ? (
-                          <div className="space-y-2">
-                            <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl mx-auto flex items-center justify-center">
-                              <Upload className="w-8 h-8 text-white" />
-                            </div>
-                            <p className="text-white font-medium">{file.name}</p>
-                            <p className="text-gray-400 text-sm">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
-                          </div>
-                        ) : (
+                        {files.length > 0 ? renderFileSection() : (
                           <div className="space-y-3">
                             <div className="w-16 h-16 bg-gray-700 rounded-xl mx-auto flex items-center justify-center">
                               <Upload className="w-8 h-8 text-gray-400" />
                             </div>
                             <div>
-                              <p className="text-gray-300 font-medium">Click to select file</p>
-                              <p className="text-gray-500 text-sm">MP4, MOV, MP3, WAV, JPG, PNG (max 100MB)</p>
+                              <p className="text-gray-300 font-medium">Click to select file(s)</p>
+                              <p className="text-gray-500 text-sm">MP4, MOV, MP3, WAV, JPG, PNG (max 100MB each)</p>
+                              <p className="text-gray-600 text-xs mt-1">Hold Ctrl/Cmd to select multiple files</p>
+                              <p className="text-gray-500 text-xs mt-2">Total storage limit: 1GB</p>
                             </div>
                           </div>
                         )}
                       </div>
 
+                      {files.length > 1 && (
+                        <div className="mt-3 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                          <p className="text-center text-xs text-blue-300">
+                            📁 Batch upload mode: Titles will be auto-generated from filenames. You can edit individual titles after upload.
+                          </p>
+                        </div>
+                      )}
+
                       {/* Form Fields */}
                       <div className="space-y-4">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-300 mb-2">
-                            Title *
-                          </label>
-                          <input
-                            type="text"
-                            value={title}
-                            onChange={(e) => setTitle(e.target.value)}
-                            className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
-                            placeholder="Enter a title"
-                            required
-                          />
-                        </div>
+                        {!isMultiMode && (
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">
+                              Title *
+                            </label>
+                            <input
+                              type="text"
+                              value={title}
+                              onChange={(e) => setTitle(e.target.value)}
+                              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
+                              placeholder="Enter a title"
+                              required
+                            />
+                          </div>
+                        )}
+
+                        {isMultiMode && (
+                          <div className="p-4 bg-yellow-900/20 border border-yellow-500/30 rounded-xl">
+                            <p className="text-yellow-300 text-sm">
+                              <strong>Batch Upload Mode:</strong> Individual titles will be auto-generated from filenames or content metadata. 
+                              You can edit titles individually after upload.
+                            </p>
+                          </div>
+                        )}
 
                         <div>
                           <label className="block text-sm font-medium text-gray-300 mb-2">
-                            Description
+                            Description {isMultiMode ? '(applied to all)' : ''}
                           </label>
                           <textarea
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
                             rows={4}
                             className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all resize-none"
-                            placeholder="Tell viewers about your content"
+                            placeholder={isMultiMode ? "Optional description for all uploads" : "Tell viewers about your content"}
                           />
                         </div>
 
                         <div>
                           <label className="block text-sm font-medium text-gray-300 mb-2">
-                            Visibility
+                            Visibility {isMultiMode ? '(applied to all)' : ''}
                           </label>
                           <div className="grid grid-cols-3 gap-3">
                             <button
@@ -645,7 +840,7 @@ export default function UploadModal() {
 
                         <div>
                           <label className="block text-sm font-medium text-gray-300 mb-2">
-                            Tags
+                            Tags {isMultiMode ? '(applied to all)' : ''}
                           </label>
                           <input
                             type="text"

@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Globe, Lock, Users, Calendar, Eye, MessageCircle, Heart } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Globe, Lock, Users, Calendar, Eye, MessageCircle, Heart, Hash, X, Plus } from 'lucide-react';
+import axios from 'axios';
 import toast from 'react-hot-toast';
 import Modal from './Modal';
+import { publicAPI } from '../../lib/api';
 
 interface MediaItem {
   id: string;
@@ -13,6 +15,12 @@ interface MediaItem {
   likeCount: number;
   commentCount: number;
   createdAt: string;
+  tags: string[];
+}
+
+interface Tag {
+  tag: string;
+  count: number;
 }
 
 interface EditMediaModalProps {
@@ -26,15 +34,80 @@ export default function EditMediaModal({ media, isOpen, onClose, onSave }: EditM
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+  const [suggestedTags, setSuggestedTags] = useState<Tag[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const tagInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (media) {
       setTitle(media.title);
       setDescription(media.description || '');
       setVisibility(media.visibility);
+      setTags(media.tags || []);
     }
   }, [media]);
+
+  // Fetch tag suggestions when input changes
+  useEffect(() => {
+    const fetchSuggestions = async () => {
+      if (tagInput.trim().length > 0) {
+        try {
+          const response = await publicAPI.getPopularTags();
+          if (response.data.success && response.data.data && Array.isArray(response.data.data)) {
+            // Filter tags that match input and aren't already selected
+            const filteredTags = response.data.data.filter((tag: Tag) => 
+              tag.tag.toLowerCase().includes(tagInput.toLowerCase()) &&
+              !tags.includes(tag.tag)
+            );
+            setSuggestedTags(filteredTags);
+            setShowSuggestions(true);
+          } else {
+            setSuggestedTags([]);
+            setShowSuggestions(false);
+          }
+        } catch (error) {
+          console.error('Error fetching tag suggestions:', error);
+          setSuggestedTags([]);
+          setShowSuggestions(false);
+        }
+      } else {
+        setSuggestedTags([]);
+        setShowSuggestions(false);
+      }
+    };
+
+    fetchSuggestions();
+  }, [tagInput, tags]);
+
+  const handleAddTag = (tag: string) => {
+    const normalizedTag = tag.trim().toLowerCase();
+    if (normalizedTag && !tags.includes(normalizedTag)) {
+      setTags([...tags, normalizedTag]);
+    }
+    setTagInput('');
+    setShowSuggestions(false);
+    tagInputRef.current?.focus();
+  };
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    setTags(tags.filter(tag => tag !== tagToRemove));
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAddTag(tagInput);
+    } else if (e.key === 'Backspace' && !tagInput) {
+      e.preventDefault();
+      const lastTag = tags[tags.length - 1];
+      if (lastTag) {
+        handleRemoveTag(lastTag);
+      }
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,7 +115,7 @@ export default function EditMediaModal({ media, isOpen, onClose, onSave }: EditM
     
     setIsSaving(true);
     try {
-      await onSave(media.id, { title, description, visibility });
+      await onSave(media.id, { title, description, visibility, tags });
       onClose();
       toast.success('Media updated successfully');
     } catch (error) {
@@ -159,6 +232,61 @@ export default function EditMediaModal({ media, isOpen, onClose, onSave }: EditM
               className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all resize-none"
               placeholder="Add a description..."
             />
+          </div>
+
+          {/* Tags Section */}
+          <div className="relative">
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Tags
+            </label>
+            <div className="min-h-[44px] p-2 bg-gray-800 border border-gray-700 rounded-xl focus-within:ring-2 focus-within:ring-purple-500 focus-within:border-transparent transition-all">
+              <div className="flex flex-wrap gap-2">
+                {tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-purple-600/30 text-purple-300 border border-purple-600/30"
+                  >
+                    <Hash className="w-3 h-3 mr-1" />
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(tag)}
+                      className="ml-2 text-purple-300 hover:text-white transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+                <input
+                  ref={tagInputRef}
+                  type="text"
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  onFocus={() => setShowSuggestions(true)}
+                  placeholder={tags.length === 0 ? "Add tags..." : ""}
+                  className="flex-1 min-w-[120px] bg-transparent border-none outline-none text-white placeholder-gray-400"
+                />
+              </div>
+            </div>
+
+            {/* Tag Suggestions */}
+            {showSuggestions && suggestedTags.length > 0 && (
+              <div className="absolute z-10 w-full mt-2 bg-gray-800 border border-gray-700 rounded-xl shadow-lg overflow-hidden">
+                {suggestedTags.map((tag) => (
+                  <button
+                    key={tag.tag}
+                    type="button"
+                    onClick={() => handleAddTag(tag.tag)}
+                    className="w-full px-4 py-2 text-left text-gray-300 hover:bg-gray-700 flex items-center space-x-2"
+                  >
+                    <Hash className="w-4 h-4" />
+                    <span>{tag.tag}</span>
+                    <span className="text-gray-500 text-sm">({tag.count})</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           
           <div>

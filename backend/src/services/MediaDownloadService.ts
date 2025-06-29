@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import { uploadCancellationService } from './UploadCancellationService';
+import { checkStorageLimit } from '../routes/user';
 
 export class MediaDownloadService {
   private backblazeService: BackblazeService;
@@ -90,6 +91,14 @@ export class MediaDownloadService {
     const jobId = uuidv4(); // Generate job ID for progress tracking
     
     try {
+      // We'll check storage after download but before processing
+      // since we don't know the file size beforehand
+      const { hasSpace, currentUsage, limit } = await checkStorageLimit(params.userId);
+      
+      if (!hasSpace) {
+        throw createError('Storage limit reached. Please free up space before downloading.', 413);
+      }
+
       this.emitUploadProgress(params.userId, jobId, 'download', 0, 'Starting download...');
       
       const dbUserId = await this.ensureUserExists(params.userId);
@@ -198,6 +207,16 @@ export class MediaDownloadService {
       // Clean up temporary file
       if (fs.existsSync(downloadResult.filePath)) {
         fs.unlinkSync(downloadResult.filePath);
+      }
+      
+      // After download, check if the downloaded file would exceed storage
+      const downloadedSize = downloadResult.size;
+      if ((currentUsage + downloadedSize) > limit) {
+        // Clean up the downloaded file
+        if (fs.existsSync(downloadResult.filePath)) {
+          fs.unlinkSync(downloadResult.filePath);
+        }
+        throw createError('Downloaded file would exceed storage limit. Please free up space.', 413);
       }
       
       // Return serialized media item (converts BigInt to string)
@@ -1087,7 +1106,7 @@ export class MediaDownloadService {
     description?: string;
     visibility: Visibility;
     tags: string[];
-    jobId?: string; // Add optional jobId parameter
+    jobId?: string;
   }): Promise<{ jobId: string; mediaItem: MediaItem }> {
     const jobId = params.jobId || uuidv4();
     
@@ -1095,6 +1114,14 @@ export class MediaDownloadService {
       if (uploadCancellationService.isCancelled(jobId)) {
         uploadCancellationService.acknowledge(jobId);
         throw createError('Upload cancelled by user before start.', 499);
+      }
+
+      // Check storage limit before proceeding
+      const { hasSpace, currentUsage, limit } = await checkStorageLimit(params.userId);
+      const fileSize = params.file.size;
+      
+      if (!hasSpace || (currentUsage + fileSize) > limit) {
+        throw createError('Storage limit reached. Please free up space before uploading.', 413);
       }
 
       const dbUserId = await this.ensureUserExists(params.userId);
@@ -1408,6 +1435,356 @@ export class MediaDownloadService {
         isValid: false, 
         reason: `Validation error: ${(error as Error).message}` 
       };
+    }
+  }
+
+  async processBatchDownload(params: {
+    userId: string;
+    urls: string[];
+    platform: Platform;
+    visibility: Visibility;
+    tags: string[];
+  }): Promise<{ jobId: string; mediaItems: MediaItem[] }> {
+    const batchJobId = uuidv4(); // Main batch job ID
+    const results: MediaItem[] = [];
+    const errors: string[] = [];
+    
+    try {
+      this.emitUploadProgress(params.userId, batchJobId, 'download', 0, `Starting batch download of ${params.urls.length} URLs...`);
+      
+      const dbUserId = await this.ensureUserExists(params.userId);
+      
+      // Process URLs in parallel with limited concurrency
+      const CONCURRENT_DOWNLOADS = 3; // Limit concurrent downloads
+      const chunks = [];
+      for (let i = 0; i < params.urls.length; i += CONCURRENT_DOWNLOADS) {
+        chunks.push(params.urls.slice(i, i + CONCURRENT_DOWNLOADS));
+      }
+      
+      let completedCount = 0;
+      for (const chunk of chunks) {
+        const chunkPromises = chunk.map(async (url, index) => {
+          const individualJobId = uuidv4();
+          const progressOffset = completedCount + index;
+          try {
+            const progressCallback = (progress: number, message: string) => {
+              const overallProgress = Math.floor(((progressOffset + progress / 100) / params.urls.length) * 80);
+              this.emitUploadProgress(params.userId, individualJobId, 'download', overallProgress, 
+                `Processing ${progressOffset + 1}/${params.urls.length}: ${message}`);
+            };
+            
+            const downloadResult = await this.downloadFromPlatform(url, params.platform, progressCallback);
+            
+            this.emitUploadProgress(params.userId, individualJobId, 'b2', 0, `Uploading ${progressOffset + 1}/${params.urls.length} to cloud...`);
+            
+            const uploadResult = await this.backblazeService.uploadFile(
+              downloadResult.filePath,
+              downloadResult.filename,
+              params.userId,
+              individualJobId
+            );
+
+            if (uploadCancellationService.isCancelled(batchJobId)) {
+              await this.backblazeService.deleteFile(uploadResult.fileId);
+              throw createError('Batch upload cancelled by user.', 499);
+            }
+            
+            this.emitUploadProgress(params.userId, individualJobId, 'gemini', 0, `Generating metadata for ${progressOffset + 1}/${params.urls.length}...`);
+            
+            const aiMetadata = await this.geminiService.generateMetadataFromFile(downloadResult.filePath);
+            
+            // Create media item with auto-generated title
+            const mediaItemData = {
+              id: uuidv4(),
+              userId: dbUserId,
+              originalUrl: url,
+              platform: params.platform,
+              title: downloadResult.title || downloadResult.metadata?.originalTitle || `Download ${progressOffset + 1}`,
+              description: downloadResult.description || downloadResult.metadata?.originalDescription,
+              visibility: params.visibility,
+              tags: params.tags,
+              downloadStatus: 'COMPLETED' as DownloadStatus,
+              publicId: params.visibility === 'PUBLIC' ? uuidv4() : undefined,
+              duration: downloadResult.metadata?.duration,
+              size: BigInt(downloadResult.size || 0),
+              format: downloadResult.format,
+              resolution: downloadResult.metadata?.resolution,
+              thumbnailUrl: downloadResult.metadata?.thumbnailUrl,
+              originalAuthor: downloadResult.metadata?.originalAuthor,
+              originalTitle: downloadResult.metadata?.originalTitle,
+              originalDescription: downloadResult.metadata?.originalDescription,
+              publishedAt: downloadResult.metadata?.publishedAt,
+              hashtags: downloadResult.metadata?.hashtags || [],
+              aiSummary: aiMetadata?.summary,
+              aiKeywords: aiMetadata?.keywords || [],
+              aiGeneratedAt: aiMetadata ? new Date() : undefined,
+              captionStatus: 'PENDING' as any,
+            };
+
+            const mediaItem = await prisma.mediaItem.create({
+              data: mediaItemData,
+              include: { files: true },
+            });
+
+            await prisma.mediaFile.create({
+              data: {
+                id: uuidv4(),
+                mediaItemId: mediaItem.id,
+                filename: uploadResult.filename,
+                originalName: downloadResult.filename,
+                mimeType: downloadResult.mimeType,
+                size: BigInt(downloadResult.size || 0),
+                b2FileId: uploadResult.fileId,
+                b2FileName: uploadResult.fileName,
+                downloadUrl: uploadResult.downloadUrl,
+                isOriginal: true,
+                format: downloadResult.format,
+              },
+            });
+            
+            // Add caption generation job
+            if (downloadResult.mimeType.includes('video') || downloadResult.mimeType.includes('audio')) {
+              try {
+                await this.captionJobService.addJob(mediaItem.id, params.userId, 0);
+              } catch (error) {
+                console.error('Failed to add caption job:', error);
+              }
+            } else {
+              await prisma.mediaItem.update({
+                where: { id: mediaItem.id },
+                data: { captionStatus: 'SKIPPED' as any }
+              });
+            }
+            
+            // Clean up temporary file
+            if (fs.existsSync(downloadResult.filePath)) {
+              fs.unlinkSync(downloadResult.filePath);
+            }
+            
+            this.emitUploadProgress(params.userId, individualJobId, 'complete', 100, 
+              `Completed ${progressOffset + 1}/${params.urls.length}`, undefined, false, mediaItem.id);
+            
+            return this.serializeMediaItem(mediaItem);
+          } catch (error) {
+            console.error(`Failed to process URL ${progressOffset + 1}:`, error);
+            errors.push(`URL ${progressOffset + 1}: ${(error as Error).message}`);
+            this.emitUploadProgress(params.userId, individualJobId, 'error', 100, 
+              `Failed ${progressOffset + 1}/${params.urls.length}`, (error as Error).message, true);
+            return null;
+          }
+        });
+        
+        const chunkResults = await Promise.all(chunkPromises);
+        results.push(...chunkResults.filter(result => result !== null) as MediaItem[]);
+        completedCount += chunk.length;
+      }
+      
+      const successCount = results.length;
+      const failureCount = errors.length;
+      
+      if (successCount > 0) {
+        this.emitUploadProgress(params.userId, batchJobId, 'complete', 100, 
+          `Batch complete: ${successCount} successful, ${failureCount} failed`, 
+          failureCount > 0 ? `Errors: ${errors.join('; ')}` : undefined);
+      } else {
+        this.emitUploadProgress(params.userId, batchJobId, 'error', 100, 
+          'All downloads failed', errors.join('; '), true);
+      }
+      
+      return { jobId: batchJobId, mediaItems: results };
+      
+    } catch (error) {
+      console.error('Batch download error:', error);
+      this.emitUploadProgress(params.userId, batchJobId, 'error', 100, 'Batch download failed', (error as Error).message, true);
+      throw error;
+    }
+  }
+
+  async processBatchDirectUpload(params: {
+    files: Express.Multer.File[];
+    userId: string;
+    description?: string;
+    visibility: Visibility;
+    tags: string[];
+    jobId?: string;
+  }): Promise<{ jobId: string; mediaItems: MediaItem[] }> {
+    const batchJobId = params.jobId || uuidv4();
+    const results: MediaItem[] = [];
+    const errors: string[] = [];
+    
+    try {
+      // Check storage limit before proceeding
+      const { hasSpace, currentUsage, limit } = await checkStorageLimit(params.userId);
+      const totalUploadSize = params.files.reduce((sum, file) => sum + file.size, 0);
+      
+      if (!hasSpace || (currentUsage + totalUploadSize) > limit) {
+        throw createError('Storage limit reached. Please free up space before uploading.', 413);
+      }
+
+      if (uploadCancellationService.isCancelled(batchJobId)) {
+        uploadCancellationService.acknowledge(batchJobId);
+        throw createError('Batch upload cancelled by user before start.', 499);
+      }
+
+      this.emitUploadProgress(params.userId, batchJobId, 'upload', 0, `Starting batch upload of ${params.files.length} files...`);
+      
+      // Process files in parallel with limited concurrency
+      const CONCURRENT_UPLOADS = 2; // Limit concurrent uploads
+      const chunks = [];
+      for (let i = 0; i < params.files.length; i += CONCURRENT_UPLOADS) {
+        chunks.push(params.files.slice(i, i + CONCURRENT_UPLOADS));
+      }
+      
+      let completedCount = 0;
+      for (const chunk of chunks) {
+        const chunkPromises = chunk.map(async (file, index) => {
+          const individualJobId = uuidv4();
+          const progressOffset = completedCount + index;
+          
+          try {
+            const progressCallback = (stage: string, progress: number, message: string) => {
+              const overallProgress = Math.floor(((progressOffset + progress / 100) / params.files.length) * 80);
+              this.emitUploadProgress(params.userId, individualJobId, stage as any, overallProgress, 
+                `Processing ${progressOffset + 1}/${params.files.length}: ${message}`);
+            };
+            
+            progressCallback('upload', 0, 'Uploading to cloud storage...');
+            
+            const uploadResult = await this.backblazeService.uploadFile(
+              file.path,
+              file.originalname,
+              params.userId,
+              individualJobId
+            );
+
+            if (uploadCancellationService.isCancelled(batchJobId)) {
+              await this.backblazeService.deleteFile(uploadResult.fileId);
+              uploadCancellationService.acknowledge(batchJobId);
+              throw createError('Batch upload cancelled by user after cloud upload.', 499);
+            }
+            
+            progressCallback('gemini', 50, 'Generating AI metadata...');
+            
+            const aiMetadata = await this.geminiService.generateMetadataFromFile(file.path);
+            
+            progressCallback('gemini', 80, 'AI metadata generated');
+            
+            // Auto-generate title from filename
+            const autoTitle = file.originalname.replace(/\.[^/.]+$/, '');
+            
+            const mediaItemData = {
+              id: uuidv4(),
+              userId: params.userId,
+              originalUrl: 'direct-upload',
+              platform: 'DIRECT' as Platform,
+              title: autoTitle,
+              description: params.description,
+              visibility: params.visibility,
+              tags: params.tags,
+              downloadStatus: 'COMPLETED' as DownloadStatus,
+              publicId: params.visibility === 'PUBLIC' ? uuidv4() : undefined,
+              size: BigInt(file.size),
+              format: path.extname(file.originalname).slice(1),
+              aiSummary: aiMetadata?.summary,
+              aiKeywords: aiMetadata?.keywords || [],
+              aiGeneratedAt: aiMetadata ? new Date() : undefined,
+              captionStatus: 'PENDING' as any,
+            };
+
+            const mediaItem = await prisma.mediaItem.create({
+              data: mediaItemData,
+              include: { files: true },
+            });
+
+            await prisma.mediaFile.create({
+              data: {
+                id: uuidv4(),
+                mediaItemId: mediaItem.id,
+                filename: uploadResult.filename,
+                originalName: file.originalname,
+                mimeType: file.mimetype,
+                size: BigInt(file.size),
+                b2FileId: uploadResult.fileId,
+                b2FileName: uploadResult.fileName,
+                downloadUrl: uploadResult.downloadUrl,
+                isOriginal: true,
+                format: path.extname(file.originalname).slice(1),
+              },
+            });
+            
+            // Add caption generation job
+            if (file.mimetype.includes('video') || file.mimetype.includes('audio')) {
+              try {
+                await this.captionJobService.addJob(mediaItem.id, params.userId, 0);
+                progressCallback('transcription', 90, 'Added to caption queue');
+              } catch (error) {
+                console.error('Failed to add caption job:', error);
+              }
+            } else {
+              await prisma.mediaItem.update({
+                where: { id: mediaItem.id },
+                data: { captionStatus: 'SKIPPED' as any }
+              });
+            }
+            
+            // Clean up temporary file
+            if (fs.existsSync(file.path)) {
+              fs.unlinkSync(file.path);
+            }
+            
+            this.emitUploadProgress(params.userId, individualJobId, 'complete', 100, 
+              `Completed ${progressOffset + 1}/${params.files.length}`, undefined, false, mediaItem.id);
+            
+            return this.serializeMediaItem(mediaItem);
+          } catch (error) {
+            console.error(`Failed to process file ${progressOffset + 1}:`, error);
+            errors.push(`File ${progressOffset + 1} (${file.originalname}): ${(error as Error).message}`);
+            
+            // Clean up temporary file on error
+            if (fs.existsSync(file.path)) {
+              fs.unlinkSync(file.path);
+            }
+            
+            this.emitUploadProgress(params.userId, individualJobId, 'error', 100, 
+              `Failed ${progressOffset + 1}/${params.files.length}`, (error as Error).message, true);
+            return null;
+          }
+        });
+        
+        const chunkResults = await Promise.all(chunkPromises);
+        results.push(...chunkResults.filter(result => result !== null) as MediaItem[]);
+        completedCount += chunk.length;
+      }
+      
+      const successCount = results.length;
+      const failureCount = errors.length;
+      
+      if (successCount > 0) {
+        this.emitUploadProgress(params.userId, batchJobId, 'complete', 100, 
+          `Batch complete: ${successCount} successful, ${failureCount} failed`, 
+          failureCount > 0 ? `Errors: ${errors.join('; ')}` : undefined);
+      } else {
+        this.emitUploadProgress(params.userId, batchJobId, 'error', 100, 
+          'All uploads failed', errors.join('; '), true);
+      }
+      
+      return { jobId: batchJobId, mediaItems: results };
+      
+    } catch (error) {
+      if ((error as any).statusCode === 499) {
+        console.log(`Batch job ${batchJobId} was cancelled as requested.`);
+      } else {
+        this.emitUploadProgress(params.userId, batchJobId, 'error', 100, 'Batch upload failed', (error as Error).message, true);
+      }
+      
+      // Clean up any remaining temp files
+      params.files.forEach(file => {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+      });
+      
+      throw error;
     }
   }
 } 

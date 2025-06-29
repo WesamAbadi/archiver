@@ -4,7 +4,7 @@ import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
+import { authenticateToken, AuthenticatedRequest, optionalAuth } from '../middleware/auth';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { MediaDownloadService } from '../services/MediaDownloadService';
 import { GeminiService } from '../services/GeminiService';
@@ -58,17 +58,37 @@ const analyticsService = new AnalyticsService();
 
 // Get public media items
 router.get('/public', asyncHandler(async (req, res) => {
-  const { filter = 'all', page = '1', limit = '20' } = req.query;
+  const { 
+    filter = 'all', 
+    page = '1', 
+    limit = '20',
+    sortBy = 'createdAt',
+    sortOrder = 'desc',
+    tag
+  } = req.query;
   
   const where: any = {
     visibility: 'PUBLIC'
   };
   
-  if (filter !== 'all') {
+  // Handle tag filtering
+  if (tag) {
+    where.tags = {
+      has: tag
+    };
+  } else if (filter !== 'all') {
     where.tags = {
       has: filter
     };
   }
+
+  // Validate sort parameters
+  const allowedSortFields = ['createdAt', 'viewCount', 'likeCount'];
+  const actualSortBy = allowedSortFields.includes(sortBy as string) ? sortBy : 'createdAt';
+  const actualSortOrder = ['asc', 'desc'].includes(sortOrder as string) ? sortOrder : 'desc';
+  
+  const orderBy: any = {};
+  orderBy[actualSortBy as string] = actualSortOrder as 'asc' | 'desc';
   
   const mediaItems = await prisma.mediaItem.findMany({
     where,
@@ -81,7 +101,7 @@ router.get('/public', asyncHandler(async (req, res) => {
       },
       files: true
     },
-    orderBy: { createdAt: 'desc' },
+    orderBy,
     skip: (parseInt(page as string) - 1) * parseInt(limit as string),
     take: parseInt(limit as string)
   });
@@ -211,6 +231,109 @@ router.post('/upload', authenticateToken, upload.single('file'), asyncHandler(as
     },
     message: 'Upload completed successfully!'
   });
+}));
+
+// Batch submit URLs for download and archiving
+router.post('/batch-submit', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const { urls, visibility = 'PRIVATE', tags = [] } = req.body;
+  
+  if (!urls || !Array.isArray(urls) || urls.length === 0) {
+    throw createError('Array of URLs is required', 400);
+  }
+  
+  // Validate all URLs
+  const validUrls = urls.filter(url => url && validateUrl(url));
+  if (validUrls.length === 0) {
+    throw createError('No valid URLs provided', 400);
+  }
+  
+  // Check platforms (for now, assume all are same platform - could be enhanced)
+  const platform = detectPlatform(validUrls[0]);
+  if (!platform) {
+    throw createError('Unsupported platform', 400);
+  }
+  
+  // Get Socket.IO instance from app
+  const io = req.app.get('io');
+  const mediaDownloadService = new MediaDownloadService(io);
+  
+  try {
+    // Start batch download processing with real-time progress
+    const result = await mediaDownloadService.processBatchDownload({
+      userId: req.user.uid,
+      urls: validUrls,
+      platform: platform.toUpperCase() as Platform,
+      visibility: visibility.toUpperCase() as Visibility,
+      tags,
+    });
+    
+    res.json({ 
+      success: true, 
+      data: {
+        jobId: result.jobId,
+        mediaItems: result.mediaItems,
+        processedCount: result.mediaItems.length,
+        totalCount: validUrls.length
+      },
+      message: `Batch download completed! Processed ${result.mediaItems.length}/${validUrls.length} URLs successfully.`
+    });
+  } catch (error) {
+    console.error('Batch download error:', error);
+    throw createError(`Batch download failed: ${(error as Error).message}`, 500);
+  }
+}));
+
+// Batch upload multiple files
+router.post('/batch-upload', authenticateToken, upload.array('files', 10), asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const files = req.files as Express.Multer.File[];
+  
+  if (!files || files.length === 0) {
+    throw createError('No files uploaded', 400);
+  }
+  
+  const { description, visibility = 'PRIVATE', tags = [] } = req.body;
+  
+  // Get Socket.IO instance from app
+  const io = req.app.get('io');
+  const mediaDownloadService = new MediaDownloadService(io);
+  
+  // Create a unique job ID for this batch upload
+  const jobId = `batch-upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  // Emit initial progress
+  io.to(`user:${req.user.uid}`).emit('upload-progress', {
+    jobId,
+    stage: 'upload',
+    progress: 0,
+    message: `Starting batch upload of ${files.length} files`,
+    details: `Processing ${files.length} files`
+  });
+  
+  try {
+    // Process and upload files with progress tracking
+    const result = await mediaDownloadService.processBatchDirectUpload({
+      files,
+      userId: req.user.uid,
+      description,
+      visibility: visibility.toUpperCase() as Visibility,
+      tags: JSON.parse(tags || '[]'),
+      jobId, // Pass the job ID for tracking
+    });
+    
+    res.json({ 
+      success: true, 
+      data: {
+        jobId: result.jobId || jobId,
+        mediaItems: result.mediaItems,
+        processedCount: result.mediaItems.length,
+        totalCount: files.length
+      },
+      message: `Batch upload completed! Processed ${result.mediaItems.length}/${files.length} files successfully.`
+    });
+  } catch (error) {
+    console.error('Batch upload error:', error);
+    throw createError(`Batch upload failed: ${(error as Error).message}`, 500);
+  }
 }));
 
 // Cancel an ongoing upload
@@ -682,6 +805,46 @@ router.get('/:id/comments', asyncHandler(async (req: AuthenticatedRequest, res) 
   });
   
   res.json({ success: true, data: comments });
+}));
+
+// Get popular tags (public endpoint)
+router.get('/popular-tags', optionalAuth, asyncHandler(async (req, res) => {
+  const { random = '3' } = req.query;
+  
+  // Get all public media items' tags
+  const mediaItems = await prisma.mediaItem.findMany({
+    where: {
+      visibility: 'PUBLIC',
+      tags: { isEmpty: false }
+    },
+    select: {
+      tags: true
+    }
+  });
+  
+  // Count tag occurrences
+  const tagCounts = mediaItems.reduce((acc, item) => {
+    item.tags.forEach(tag => {
+      acc[tag] = (acc[tag] || 0) + 1;
+    });
+    return acc;
+  }, {} as Record<string, number>);
+  
+  // Convert to array and sort by count
+  const sortedTags = Object.entries(tagCounts)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 50) // Get top 50 most used tags
+    .map(([tag, count]) => ({ tag, count }));
+  
+  // If random parameter is provided, return random tags from top 50
+  if (random) {
+    const numRandom = Math.min(parseInt(random as string), sortedTags.length);
+    const shuffled = [...sortedTags].sort(() => Math.random() - 0.5);
+    res.json({ success: true, data: shuffled.slice(0, numRandom) });
+    return;
+  }
+  
+  res.json({ success: true, data: sortedTags });
 }));
 
 export default router; 
