@@ -30,7 +30,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Create socket connection
-    const newSocket = io('http://localhost:3003', {
+    const newSocket = io(import.meta.env.VITE_API_URL || 'http://localhost:3003', {
       transports: ['websocket'],
       autoConnect: true,
     });
