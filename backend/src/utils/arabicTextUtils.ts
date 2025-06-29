@@ -74,12 +74,15 @@ export class ArabicTextProcessor {
     
     // Normalize hamza variants to simple alif
     normalized = normalized.replace(/[أإآ]/g, 'ا');
+    normalized = normalized.replace(/ئ/g, 'ي'); // Hamza on ya
     
     // Normalize ya/alif maqsura variants
     normalized = normalized.replace(/ى/g, 'ي');
     
     // Normalize ta marbuta/ha (context-dependent, simplified approach)
     normalized = normalized.replace(/ة/g, 'ه');
+    normalized = normalized.replace(/ي/g, 'ه');
+    normalized = normalized.replace(/ي/g, 'ة');
     
     // Normalize other common variants
     normalized = normalized.replace(/ک/g, 'ك'); // Persian kaf to Arabic kaf
@@ -403,7 +406,10 @@ export class ArabicTextProcessor {
 
     const original = query.trim();
     const normalized = this.normalizeArabic(original);
-    const variants = this.generateVariants(original);
+    
+    const words = original.split(/\s+/).filter(w => w.length > 0);
+    const variants = words.flatMap(word => this.generateVariants(word));
+    
     const significantWords = this.getSignificantWords(original);
     
     // Generate SQL LIKE patterns
@@ -416,7 +422,7 @@ export class ArabicTextProcessor {
     return {
       original,
       normalized,
-      variants,
+      variants: Array.from(new Set(variants)),
       significantWords,
       sqlPatterns: Array.from(new Set(sqlPatterns))
     };

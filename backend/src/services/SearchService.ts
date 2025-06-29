@@ -148,7 +148,7 @@ export class SearchService {
             m."commentCount",
             GREATEST(
               -- Full-text search score
-              COALESCE(ts_rank_cd(m."searchVector", to_tsquery('english', ${tsQuery})), 0) * 3,
+              COALESCE(ts_rank_cd(m."searchVector", to_tsquery('simple', ${tsQuery})), 0) * 3,
               
               -- Title fuzzy matching
               COALESCE(similarity(m.title, ${originalQuery}), 0) * 2.5,
@@ -172,7 +172,7 @@ export class SearchService {
             (m.visibility = 'PUBLIC' OR (m.visibility = 'PRIVATE' AND m."userId" = ${userId || ''}))
             AND (
               -- Full-text search
-              m."searchVector" @@ to_tsquery('english', ${tsQuery})
+              m."searchVector" @@ to_tsquery('simple', ${tsQuery})
               
               -- Exact matches
               OR m.title ILIKE ${`%${originalQuery}%`}
@@ -188,13 +188,17 @@ export class SearchService {
               OR m.description % ${originalQuery}
               OR m.description % ${normalizedQuery}
               
-              -- Similarity threshold matches
+              -- Similarity threshold matches (for title)
               OR similarity(m.title, ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
               OR similarity(m.title, ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
               OR word_similarity(m.title, ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
               OR word_similarity(m.title, ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
-              OR similarity(m.description, ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
-              OR similarity(m.description, ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
+
+              -- Similarity threshold matches (for description)
+              OR similarity(COALESCE(m.description, ''), ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
+              OR similarity(COALESCE(m.description, ''), ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
+              OR word_similarity(COALESCE(m.description, ''), ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
+              OR word_similarity(COALESCE(m.description, ''), ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
               
               -- Caption matches
               OR am."mediaItemId" IS NOT NULL
@@ -276,6 +280,8 @@ export class SearchService {
           OR m.title % ${normalizedQuery}
           OR similarity(m.title, ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
           OR similarity(m.title, ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
+          OR word_similarity(m.title, ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
+          OR word_similarity(m.title, ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
           
           -- Description matches  
           OR m.description ILIKE ${`%${originalQuery}%`}
@@ -284,6 +290,8 @@ export class SearchService {
           OR m.description % ${normalizedQuery}
           OR similarity(m.description, ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
           OR similarity(m.description, ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
+          OR word_similarity(m.description, ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
+          OR word_similarity(m.description, ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
           
           -- Caption matches
           OR EXISTS (
@@ -297,6 +305,8 @@ export class SearchService {
               OR cs2.text % ${normalizedQuery}
               OR similarity(cs2.text, ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
               OR similarity(cs2.text, ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
+              OR word_similarity(cs2.text, ${originalQuery}) > ${SearchService.FUZZY_THRESHOLD}
+              OR word_similarity(cs2.text, ${normalizedQuery}) > ${SearchService.FUZZY_THRESHOLD}
             )
           )
         )
