@@ -95,6 +95,7 @@ export function WatchPage() {
   const [currentCommentIndex, setCurrentCommentIndex] = useState(0)
   const [commentTransition, setCommentTransition] = useState(false)
   const [commentsLoading, setCommentsLoading] = useState(false)
+  const [showMobileLyrics, setShowMobileLyrics] = useState(true)
   const mediaPlayerRef = useRef<MediaPlayerRef>(null)
   const lyricsContainerRef = useRef<HTMLDivElement>(null)
   const activeLyricRef = useRef<HTMLDivElement>(null)
@@ -107,15 +108,14 @@ export function WatchPage() {
 
   // Format time with consistent 3 decimal precision
   const formatTime = (seconds: number) => {
-    if (isNaN(seconds)) return '0:00.000';
+    if (isNaN(seconds)) return '0:00';
     
     const totalSeconds = Math.max(0, seconds);
     
     const mins = Math.floor(totalSeconds / 60);
     const secs = Math.floor(totalSeconds % 60);
-    const millis = Math.round((totalSeconds - Math.floor(totalSeconds)) * 1000);
     
-    return `${mins}:${secs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   }
 
   // Get media item with engagement data
@@ -247,6 +247,18 @@ export function WatchPage() {
       currentTimeFixed >= segment.startTime && currentTimeFixed <= segment.endTime
     );
   }
+
+  // Check if we're within any caption segment time range
+  const isWithinCaptionRange = () => {
+    if (!captions.length) return false;
+    const currentTimeFixed = Number(currentTime.toFixed(3));
+    const segments = captions[0].segments;
+    return currentTimeFixed >= segments[0].startTime && 
+           currentTimeFixed <= segments[segments.length - 1].endTime;
+  }
+
+  const currentCaption = getCurrentCaption();
+  const showingCaptions = isWithinCaptionRange();
 
   // Auto-scroll to active lyric
   useEffect(() => {
@@ -644,18 +656,57 @@ export function WatchPage() {
                     </div>
                   )}
                   
+                  {/* Mobile Lyrics Overlay */}
+                  <div className={`lg:hidden absolute inset-0 bg-black/70 backdrop-blur-sm transition-opacity duration-300 ${
+                    showMobileLyrics && showingCaptions ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                  }`}>
+                    {currentCaption && (
+                      <div className="absolute inset-0 flex flex-col justify-center items-center p-6">
+                        <div className="text-center max-w-full">
+                          <div className="text-xs text-purple-300 mb-3 opacity-80">
+                            {formatTime(currentCaption.startTime)} - {formatTime(currentCaption.endTime)}
+                          </div>
+                          <p 
+                            className={`text-xl md:text-2xl leading-relaxed text-white font-medium bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent transition-all duration-500 ${
+                              isRTL(currentCaption.text) ? 'font-arabic text-right' : 'text-center'
+                            }`}
+                            style={{ 
+                              direction: isRTL(currentCaption.text) ? 'rtl' : 'ltr',
+                              fontFamily: isRTL(currentCaption.text) ? 'Arial, "Noto Sans Arabic", sans-serif' : 'inherit'
+                            }}
+                          >
+                            {currentCaption.text}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
                   {/* Play/Pause Overlay */}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
-                    <button
-                      onClick={togglePlayPause}
-                      className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-xl hover:scale-105 transition-transform"
-                    >
-                      {isPlaying ? (
-                        <Pause className="w-8 h-8 text-black" />
-                      ) : (
-                        <Play className="w-8 h-8 text-black ml-1" />
+                    <div className="flex flex-col items-center space-y-4">
+                      <button
+                        onClick={togglePlayPause}
+                        className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-xl hover:scale-105 transition-transform"
+                      >
+                        {isPlaying ? (
+                          <Pause className="w-8 h-8 text-black" />
+                        ) : (
+                          <Play className="w-8 h-8 text-black ml-1" />
+                        )}
+                      </button>
+                      
+                      {/* Toggle Lyrics Button - Mobile Only */}
+                      {captions.length > 0 && (
+                        <button
+                          onClick={() => setShowMobileLyrics(!showMobileLyrics)}
+                          className="lg:hidden px-4 py-2 bg-purple-600/80 backdrop-blur-sm text-white rounded-full text-sm font-medium hover:bg-purple-700/80 transition-all flex items-center space-x-2"
+                        >
+                          <FileText className="w-4 h-4" />
+                          <span>{showMobileLyrics ? 'Hide Lyrics' : 'Show Lyrics'}</span>
+                        </button>
                       )}
-                    </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -782,7 +833,7 @@ export function WatchPage() {
             </div>
 
             {/* Right Side - Lyrics */}
-            <div className="flex flex-col h-full">
+            <div className="hidden sm:flex flex-col h-full">
               <div className="mb-6">
                 <h2 className="text-2xl font-bold mb-2">Lyrics</h2>
                 <p className="text-gray-400 text-sm">
@@ -797,12 +848,28 @@ export function WatchPage() {
                     </>
                   ) : 'No lyrics available'}
                 </p>
+                
+                {/* Desktop Lyrics Toggle */}
+                {captions.length > 0 && (
+                  <div className="hidden lg:flex items-center space-x-4 mt-3">
+                    <button
+                      onClick={() => setShowCaptions(!showCaptions)}
+                      className={`px-3 py-1 rounded-full text-sm transition-all ${
+                        showCaptions 
+                          ? 'bg-purple-600/20 text-purple-300 border border-purple-600/30' 
+                          : 'bg-gray-800 text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      {showCaptions ? 'Hide Lyrics' : 'Show Lyrics'}
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {captions.length > 0 ? (
+              {captions.length > 0 && showCaptions ? (
                 <div 
                   ref={lyricsContainerRef}
-                  className="flex-1 overflow-y-auto space-y-6 max-h-96 pr-4 custom-scrollbar"
+                  className="hidden lg:block flex-1 overflow-y-auto space-y-6 max-h-96 pr-4 custom-scrollbar scroll-smooth"
                 >
                   {/* Display phrase-level captions naturally */}
                   {captions[0].segments.map((segment, index) => {
@@ -828,7 +895,7 @@ export function WatchPage() {
                         }}
                       >
                         <div className={`text-center ${isSegmentRTL ? 'rtl-content' : ''}`}>
-                          <div className="text-sm text-white mb-3">
+                          <div className="text-sm text-purple-300 mb-3 opacity-80">
                             {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
                           </div>
                           <p className={`text-xl md:text-2xl leading-relaxed transition-all duration-300 ${
@@ -841,34 +908,25 @@ export function WatchPage() {
                           }}>
                             {segment.text}
                           </p>
-                          {/* Show segment info */}
-                          <div className="text-xs text-gray-600 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <div className="flex justify-center space-x-4 text-center">
-                              <span>
-                                Confidence: {Math.round(confidence * 100)}%
-                              </span>
-                              <span>
-                                Duration: {(segment.endTime - segment.startTime).toFixed(1)}s
-                              </span>
-                              <span>
-                                Segment {index + 1}
-                              </span>
-                            </div>
-                          </div>
                         </div>
                       </div>
                     );
                   })}
                 </div>
               ) : (
-                <div className="flex-1 flex items-center justify-center text-center">
+                <div className="hidden lg:flex flex-1 items-center justify-center text-center">
                   <div>
                     <div className="text-6xl mb-4 opacity-20">🎤</div>
-                    <p className="text-gray-400 text-lg">No lyrics available</p>
-                    <p className="text-gray-500 text-sm mt-2">Lyrics will appear here when available</p>
+                    <p className="text-gray-400 text-lg">
+                      {captions.length === 0 ? 'No lyrics available' : 'Lyrics hidden'}
+                    </p>
+                    <p className="text-gray-500 text-sm mt-2">
+                      {captions.length === 0 ? 'Lyrics will appear here when available' : 'Click "Show Lyrics" to display them'}
+                    </p>
                   </div>
                 </div>
               )}
+
             </div>
           </div>
 
@@ -950,6 +1008,22 @@ export function WatchPage() {
           overflow: hidden;
         }
 
+        /* Fade in animation for mobile lyrics overlay */
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(5px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        .animate-fadeIn {
+          animation: fadeIn 0.3s ease-out;
+        }
+
         /* Arabic/RTL specific styles */
         .font-arabic {
           font-family: 'Noto Sans Arabic', 'Amiri', 'Arial Unicode MS', Arial, sans-serif;
@@ -972,6 +1046,35 @@ export function WatchPage() {
         .rtl-content .text-xl {
           line-height: 1.8;
           letter-spacing: 0.02em;
+        }
+
+        /* Mobile responsive adjustments */
+        @media (max-width: 1024px) {
+          .album-art-overlay {
+            padding: 1rem;
+          }
+          
+          .album-art-overlay p {
+            font-size: 1rem;
+            line-height: 1.6;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .album-art-overlay p {
+            font-size: 0.9rem;
+            line-height: 1.5;
+          }
+        }
+
+        /* Ensure smooth scrolling for lyrics container */
+        .scroll-smooth {
+          scroll-behavior: smooth;
+        }
+
+        /* Center the active lyric in the container */
+        .custom-scrollbar {
+          scroll-padding: 50vh;
         }
       `}</style>
     </PageContainer>
