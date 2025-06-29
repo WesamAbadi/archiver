@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { searchAPI } from '../lib/api';
 import type { MediaItem, SearchResult } from '../lib/api';
@@ -29,6 +29,10 @@ export function useSearch(): UseSearchResult {
   const [currentQuery, setCurrentQuery] = useState('');
   const [currentOptions, setCurrentOptions] = useState<SearchOptions>({});
 
+  // Refs for request cancellation
+  const searchAbortControllerRef = useRef<AbortController>();
+  const suggestionsAbortControllerRef = useRef<AbortController>();
+
   // Debounced function to fetch search suggestions
   const debouncedFetchSuggestions = useCallback(
     debounce(async (query: string) => {
@@ -38,10 +42,21 @@ export function useSearch(): UseSearchResult {
       }
 
       try {
-        const response = await searchAPI.getSuggestions({ q: query });
+        // Cancel previous suggestions request
+        if (suggestionsAbortControllerRef.current) {
+          suggestionsAbortControllerRef.current.abort();
+        }
+
+        // Create new abort controller
+        suggestionsAbortControllerRef.current = new AbortController();
+
+        const response = await searchAPI.getSuggestions({ q: query }, suggestionsAbortControllerRef.current.signal);
         setSuggestions(response.data);
       } catch (error) {
-        console.error('Failed to fetch suggestions:', error);
+        // Only log error if it's not an abort error
+        if (error instanceof Error && error.name !== 'AbortError') {
+          console.error('Failed to fetch suggestions:', error);
+        }
       }
     }, 300),
     []
@@ -54,6 +69,14 @@ export function useSearch(): UseSearchResult {
       setSuggestions([]);
       return;
     }
+
+    // Cancel previous search request
+    if (searchAbortControllerRef.current) {
+      searchAbortControllerRef.current.abort();
+    }
+
+    // Create new abort controller
+    searchAbortControllerRef.current = new AbortController();
 
     setLoading(true);
     setError(null);
@@ -68,15 +91,18 @@ export function useSearch(): UseSearchResult {
         includePrivate: user ? options.includePrivate : false
       };
 
-      const response = await searchAPI.search(searchOptions);
+      const response = await searchAPI.search(searchOptions, searchAbortControllerRef.current.signal);
       setSearchResults(response.data);
       
       // Fetch suggestions for the search query
       debouncedFetchSuggestions(query);
     } catch (error) {
-      console.error('Search error:', error);
-      setError('Failed to perform search');
-      setSearchResults(null);
+      // Only show error if it's not an abort error
+      if (error instanceof Error && error.name !== 'AbortError') {
+        console.error('Search error:', error);
+        setError('Failed to perform search');
+        setSearchResults(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -112,10 +138,18 @@ export function useSearch(): UseSearchResult {
     }
   };
 
-  // Cleanup debounced function on unmount
+  // Cleanup debounced function and abort controllers on unmount
   useEffect(() => {
     return () => {
       debouncedFetchSuggestions.cancel();
+      
+      if (searchAbortControllerRef.current) {
+        searchAbortControllerRef.current.abort();
+      }
+      
+      if (suggestionsAbortControllerRef.current) {
+        suggestionsAbortControllerRef.current.abort();
+      }
     };
   }, [debouncedFetchSuggestions]);
 

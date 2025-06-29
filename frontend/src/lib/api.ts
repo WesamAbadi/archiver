@@ -206,12 +206,12 @@ export const searchAPI = {
     limit?: number;
     offset?: number;
     includePrivate?: boolean;
-  }) => api.get<SearchResult>('/search', { params }),
+  }, signal?: AbortSignal) => api.get<SearchResult>('/search', { params, signal }),
   
   getSuggestions: (params: {
     q: string;
     limit?: number;
-  }) => api.get<string[]>('/search/suggestions', { params }),
+  }, signal?: AbortSignal) => api.get<string[]>('/search/suggestions', { params, signal }),
 }
 
 export interface SearchResult {

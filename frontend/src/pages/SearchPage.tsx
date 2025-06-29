@@ -30,7 +30,7 @@ export function SearchPage() {
 
   // Perform initial search
   useEffect(() => {
-    if (query) {
+    if (query && query.length >= 2) {
       search(query, {
         limit: 20,
         includePrivate: !!user

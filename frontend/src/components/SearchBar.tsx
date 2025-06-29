@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearch } from '../hooks/useSearch';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -98,9 +98,15 @@ export function SearchBar({
 }: SearchBarProps) {
   const [query, setQuery] = useState(initialQuery);
   const [showResults, setShowResults] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const { user } = useAuth();
   const navigate = useNavigate();
   const searchBarRef = useRef<HTMLDivElement>(null);
+  
+  // Refs for debouncing and cancellation
+  const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const abortControllerRef = useRef<AbortController>();
+  const lastSearchQueryRef = useRef<string>('');
   
   const { 
     search, 
@@ -109,19 +115,78 @@ export function SearchBar({
     loading 
   } = useSearch();
 
+  // Debounced search function
+  const debouncedSearch = useCallback(async (searchQuery: string) => {
+    // Clear previous timeout
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
+    }
+
+    // Cancel previous request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    // Don't search if query is too short or same as last search
+    if (!searchQuery.trim() || searchQuery.length < 2) {
+      setShowResults(false);
+      setIsSearching(false);
+      return;
+    }
+
+    // Don't search if it's the same query as last time
+    if (searchQuery === lastSearchQueryRef.current) {
+      return;
+    }
+
+    // Set debounce timeout
+    debounceTimeoutRef.current = setTimeout(async () => {
+      try {
+        setIsSearching(true);
+        
+        // Create new abort controller for this request
+        abortControllerRef.current = new AbortController();
+        
+        // Update last search query
+        lastSearchQueryRef.current = searchQuery;
+        
+        await search(searchQuery, { 
+          limit: 5,
+          includePrivate: !!user 
+        });
+        
+        setShowResults(true);
+      } catch (error) {
+        // Only show error if it's not an abort error
+        if (error instanceof Error && error.name !== 'AbortError') {
+          console.error('Search error:', error);
+        }
+      } finally {
+        setIsSearching(false);
+      }
+    }, 400); // 300ms debounce delay
+  }, [search, user]);
+
   // Handle search input change
-  const handleInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setQuery(value);
     
     if (value.trim()) {
-      await search(value, { 
-        limit: 5,
-        includePrivate: !!user 
-      });
-      setShowResults(true);
+      debouncedSearch(value);
     } else {
+      // Clear results immediately for empty query
       setShowResults(false);
+      setIsSearching(false);
+      lastSearchQueryRef.current = '';
+      
+      // Cancel any pending search
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     }
   };
 
@@ -129,6 +194,11 @@ export function SearchBar({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (query.trim()) {
+      // Cancel any pending debounced search
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+      
       setShowResults(false);
       if (onSearch) {
         onSearch(query);
@@ -182,6 +252,18 @@ export function SearchBar({
     setQuery(initialQuery);
   }, [initialQuery]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
   return (
     <div ref={searchBarRef} className={`relative ${className}`}>
       <form onSubmit={handleSubmit} className="relative">
@@ -201,6 +283,13 @@ export function SearchBar({
               onClick={() => {
                 setQuery('');
                 setShowResults(false);
+                lastSearchQueryRef.current = '';
+                if (debounceTimeoutRef.current) {
+                  clearTimeout(debounceTimeoutRef.current);
+                }
+                if (abortControllerRef.current) {
+                  abortControllerRef.current.abort();
+                }
               }}
               className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
             >
@@ -214,14 +303,15 @@ export function SearchBar({
       {showResults && (
         <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg shadow-lg overflow-hidden">
           {/* Loading state */}
-          {loading && (
+          {(loading || isSearching) && (
             <div className="p-4 text-center">
               <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-300 border-t-blue-600 mx-auto"></div>
+              <div className="text-xs text-gray-500 mt-1">Searching...</div>
             </div>
           )}
 
           {/* Results */}
-          {!loading && searchResults?.items.length === 0 && suggestions.length === 0 && (
+          {!loading && !isSearching && searchResults?.items.length === 0 && suggestions.length === 0 && (
             <div className="p-4 text-center text-gray-500 dark:text-gray-400">
               No results found
             </div>
@@ -272,7 +362,7 @@ export function SearchBar({
           {suggestions.length > 0 && (
             <>
               {searchResults?.items.length > 0 && (
-                <div className="px-4 py-2 text-xs font-medium">
+                <div className="px-4 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700">
                   Suggestions
                 </div>
               )}
@@ -294,8 +384,11 @@ export function SearchBar({
           {/* View all results */}
           {(searchResults?.total || 0) > 5 && (
             <button
-              onClick={() => navigate(`/search?q=${encodeURIComponent(query)}`)}
-              className="w-full px-4 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700 font-medium"
+              onClick={() => {
+                setShowResults(false);
+                navigate(`/search?q=${encodeURIComponent(query)}`);
+              }}
+              className="w-full px-4 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700 font-medium border-t border-gray-200 dark:border-gray-700"
             >
               View all {searchResults?.total} results
             </button>
