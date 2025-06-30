@@ -149,9 +149,9 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-gray-900 pt-16 md:pt-20 pb-20 md:pb-8">
-      <div className="max-w-[2200px] mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="max-w-[2400px] mx-auto px-3 sm:px-4 lg:px-6">
         {/* Filter Pills */}
-        <div className="flex flex-col sm:flex-row gap-4 mb-8">
+        <div className="flex flex-col sm:flex-row gap-4 mb-6">
           {/* Tag Filters */}
           <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
             <button
@@ -215,17 +215,17 @@ export default function HomePage() {
 
         {/* Media Grid */}
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3 sm:gap-4">
             {[...Array(12)].map((_, i) => (
               <div key={i} className="animate-pulse">
-                <div className="aspect-video bg-gray-800 rounded-xl mb-3"></div>
-                <div className="h-4 bg-gray-800 rounded w-3/4 mb-2"></div>
-                <div className="h-3 bg-gray-800 rounded w-1/2"></div>
+                <div className="aspect-video bg-gray-800 rounded-lg mb-2"></div>
+                <div className="h-3 bg-gray-800 rounded w-3/4 mb-1.5"></div>
+                <div className="h-2 bg-gray-800 rounded w-1/2"></div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3 sm:gap-4">
             {Array.isArray(mediaItems) && mediaItems.map((item) => (
               <Link
                 key={item.id}
@@ -233,7 +233,7 @@ export default function HomePage() {
                 className="group"
               >
                 {/* Thumbnail */}
-                <div className="relative aspect-video bg-gray-800 rounded-xl overflow-hidden mb-3">
+                <div className="relative bg-gray-800 rounded-lg overflow-hidden mb-2">
                   {item.thumbnailUrl ? (
                     <img
                       src={item.thumbnailUrl}
@@ -253,28 +253,28 @@ export default function HomePage() {
                 </div>
 
                 {/* Info */}
-                <div className="flex gap-3">
+                <div className="flex gap-2">
                   {item.user.photoURL ? (
                     <img
                       src={item.user.photoURL}
                       alt={item.user.displayName}
-                      className="w-9 h-9 rounded-full"
+                      className="w-7 h-7 rounded-full"
                     />
                   ) : (
-                    <div className="w-9 h-9 bg-gray-700 rounded-full flex items-center justify-center">
-                      <span className="text-sm font-medium text-gray-300">
+                    <div className="w-7 h-7 bg-gray-700 rounded-full flex items-center justify-center">
+                      <span className="text-xs font-medium text-gray-300">
                         {item.user.displayName?.[0] || '?'}
                       </span>
                     </div>
                   )}
                   <div>
-                    <h3 className="text-white font-medium line-clamp-2 group-hover:text-blue-400 transition-colors">
+                    <h3 className="text-sm text-white font-medium line-clamp-2 group-hover:text-blue-400 transition-colors">
                       {item.title}
                     </h3>
-                    <p className="text-sm text-gray-400 mt-1">
+                    <p className="text-xs text-gray-400 mt-0.5">
                       {item.user.displayName}
                     </p>
-                    <p className="text-sm text-gray-400">
+                    <p className="text-xs text-gray-400">
                       {formatViewCount(item.viewCount)} • {formatDistanceToNow(new Date(item.createdAt))} ago
                     </p>
                   </div>

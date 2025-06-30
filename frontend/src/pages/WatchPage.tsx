@@ -35,7 +35,12 @@ import {
   MoreHorizontal,
   CheckCircle,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  Info,
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw,
+  X
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -108,9 +113,16 @@ export function WatchPage() {
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [showMobileLyrics, setShowMobileLyrics] = useState(true)
   const [showAllLyricsModal, setShowAllLyricsModal] = useState(false)
+  const [showMobileControls, setShowMobileControls] = useState(false)
+  const [showMobileInfo, setShowMobileInfo] = useState(false)
+  const [activeTab, setActiveTab] = useState<'lyrics' | 'info'>('lyrics')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [isScrollingSynced, setIsScrollingSynced] = useState(true)
+  const [showSyncButton, setShowSyncButton] = useState(false)
   const mediaPlayerRef = useRef<MediaPlayerRef>(null)
   const lyricsContainerRef = useRef<HTMLDivElement>(null)
   const activeLyricRef = useRef<HTMLDivElement>(null)
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
 
   // Get media item with engagement data
   const { data: mediaData, isLoading, error } = useQuery(
@@ -468,6 +480,78 @@ export function WatchPage() {
     }
   }
 
+  // Handle lyrics scrolling sync
+  const handleLyricsScroll = () => {
+    if (!isScrollingSynced) return;
+    
+    // Clear existing timeout
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+    
+    // Set sync to false temporarily
+    setIsScrollingSynced(false);
+    setShowSyncButton(true);
+    
+    // Reset after 3 seconds of no scrolling
+    scrollTimeoutRef.current = setTimeout(() => {
+      setIsScrollingSynced(true);
+      setShowSyncButton(false);
+    }, 3000);
+  };
+
+  const syncToCurrentLyric = () => {
+    setIsScrollingSynced(true);
+    setShowSyncButton(false);
+  };
+
+  // Get current caption segment and surrounding context
+  const getLyricsContext = () => {
+    if (!captions.length || !showCaptions) return null;
+    
+    const currentTimeFixed = Number(currentTime.toFixed(3));
+    const segments = captions[0].segments;
+    
+    // Find current active segment index
+    const activeIndex = segments.findIndex((segment) => 
+      currentTimeFixed >= segment.startTime && currentTimeFixed <= segment.endTime
+    );
+    
+    // If no active segment, find the next one
+    const nextIndex = activeIndex === -1 
+      ? segments.findIndex(segment => currentTimeFixed < segment.startTime)
+      : activeIndex;
+    
+    const currentIndex = nextIndex === -1 ? segments.length - 1 : nextIndex;
+    
+    return {
+      previous: currentIndex > 0 ? segments[currentIndex - 1] : null,
+      current: segments[currentIndex] || null,
+      next: currentIndex < segments.length - 1 ? segments[currentIndex + 1] : null,
+      activeIndex: activeIndex,
+      currentIndex
+    };
+  };
+
+  // Auto-scroll to active lyric only when synced
+  useEffect(() => {
+    if (isScrollingSynced && activeLyricRef.current && lyricsContainerRef.current) {
+      const container = lyricsContainerRef.current
+      const activeLyric = activeLyricRef.current
+      
+      const containerHeight = container.clientHeight
+      const lyricTop = activeLyric.offsetTop
+      const lyricHeight = activeLyric.clientHeight
+      
+      const scrollTop = lyricTop - (containerHeight / 2) + (lyricHeight / 2)
+      
+      container.scrollTo({
+        top: scrollTop,
+        behavior: 'smooth'
+      })
+    }
+  }, [currentTime, captions, isScrollingSynced])
+
   if (isLoading) {
     return (
       <div className="min-h-screen relative">
@@ -739,6 +823,8 @@ export function WatchPage() {
     )
   }
 
+  const lyricsContext = getLyricsContext();
+
   return (
     <div className="min-h-screen relative">
       <DynamicBackground 
@@ -760,9 +846,15 @@ export function WatchPage() {
       {/* Main Player Interface */}
       <div className="relative z-10 flex-1 p-6">
         <div className="w-full max-w-7xl mx-auto">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+          <div className={`grid gap-12 transition-all duration-500 ${
+            sidebarCollapsed 
+              ? 'grid-cols-1' 
+              : 'grid-cols-1 lg:grid-cols-2'
+          }`}>
             {/* Left Side - Album Art & Controls */}
-            <div className="flex flex-col items-center space-y-8">
+            <div className={`flex flex-col items-center space-y-8 ${
+              sidebarCollapsed ? 'max-w-2xl mx-auto' : ''
+            } transition-all duration-500`}>
               {/* Album Art */}
               <div className="relative group">
                 <div className="w-80 h-80 md:w-96 md:h-96 rounded-3xl bg-gradient-to-br from-purple-500 via-pink-500 to-red-500 shadow-2xl overflow-hidden">
@@ -814,9 +906,95 @@ export function WatchPage() {
                     </div>
                   </div>
                   
-                  {/* Play/Pause Overlay */}
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
-                    <div className="flex flex-col items-center space-y-4">
+                  {/* Mobile Controls Overlay - Click to show, click again to hide */}
+                  <div 
+                    className={`lg:hidden absolute inset-0 transition-all duration-300 ${
+                      showMobileControls ? 'bg-black/40 opacity-100' : 'opacity-0'
+                    }`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!showMobileControls) {
+                        setShowMobileControls(true);
+                      }
+                    }}
+                  >
+                    <div className={`absolute inset-0 flex items-center justify-center transition-all duration-300 ${
+                      showMobileControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                    }`}>
+                      <div className="flex flex-col items-center space-y-4">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePlayPause();
+                          }}
+                          className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-xl hover:scale-105 transition-transform"
+                        >
+                          {isPlaying ? (
+                            <Pause className="w-8 h-8 text-black" />
+                          ) : (
+                            <Play className="w-8 h-8 text-black ml-1" />
+                          )}
+                        </button>
+                        
+                        <div className="flex items-center space-x-4">
+                          {/* Toggle Lyrics Button */}
+                          {captions.length > 0 && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setShowMobileLyrics(!showMobileLyrics);
+                              }}
+                              className="px-3 py-2 bg-purple-600/80 backdrop-blur-sm text-white rounded-full text-xs font-medium hover:bg-purple-700/80 transition-all flex items-center space-x-1.5"
+                            >
+                              <FileText className="w-3 h-3" />
+                              <span>{showMobileLyrics ? 'Hide' : 'Show'}</span>
+                            </button>
+                          )}
+                          
+                          {/* View All Lyrics Button */}
+                          {captions.length > 0 && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setShowAllLyricsModal(true);
+                              }}
+                              className="px-3 py-2 bg-gray-700/80 backdrop-blur-sm text-gray-300 rounded-full text-xs font-medium hover:bg-gray-600/80 transition-all flex items-center space-x-1.5"
+                            >
+                              <FileText className="w-3 h-3" />
+                              <span>All</span>
+                            </button>
+                          )}
+                          
+                          {/* Info Button */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowMobileInfo(true);
+                            }}
+                            className="px-3 py-2 bg-gray-700/80 backdrop-blur-sm text-gray-300 rounded-full text-xs font-medium hover:bg-gray-600/80 transition-all flex items-center space-x-1.5"
+                          >
+                            <Info className="w-3 h-3" />
+                            <span>Info</span>
+                          </button>
+                        </div>
+                        
+                        {/* Close Button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowMobileControls(false);
+                          }}
+                          className="mt-3 w-8 h-8 bg-gray-800/80 backdrop-blur-sm text-gray-300 rounded-full flex items-center justify-center hover:bg-gray-700/80 transition-all"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Desktop Play/Pause Overlay */}
+                  <div className="hidden lg:block absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                    <div className="absolute inset-0 flex items-center justify-center">
                       <button
                         onClick={togglePlayPause}
                         className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-xl hover:scale-105 transition-transform"
@@ -827,25 +1005,6 @@ export function WatchPage() {
                           <Play className="w-8 h-8 text-black ml-1" />
                         )}
                       </button>
-                      
-                      {/* Toggle Lyrics Button - Mobile Only */}
-                      {captions.length > 0 && (
-                        <div className="lg:hidden flex flex-col items-center space-y-2">
-                          <button
-                            onClick={() => setShowMobileLyrics(!showMobileLyrics)}
-                            className="px-4 py-2 bg-purple-600/80 backdrop-blur-sm text-white rounded-full text-sm font-medium hover:bg-purple-700/80 transition-all flex items-center space-x-2"
-                          >
-                            <FileText className="w-4 h-4" />
-                            <span>{showMobileLyrics ? 'Hide Lyrics' : 'Show Lyrics'}</span>
-                          </button>
-                          <button
-                            onClick={() => setShowAllLyricsModal(true)}
-                            className="px-4 py-2 bg-gray-700/80 backdrop-blur-sm text-gray-300 rounded-full text-sm font-medium hover:bg-gray-600/80 transition-all flex items-center space-x-2"
-                          >
-                            <span>View All Lyrics</span>
-                          </button>
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -972,128 +1131,462 @@ export function WatchPage() {
               </div>
             </div>
 
-            {/* Right Side - Lyrics */}
-            <div className="hidden sm:flex flex-col h-full">
-              <div className="mb-6">
-                <h2 className="text-2xl font-bold mb-2">Lyrics</h2>
-                <p className="text-gray-400 text-sm">
-                  {captions.length > 0 ? (
-                    <>
-                      {captions[0].segments.length} segments • Auto-generated
-                      {captions[0].segments.some(s => isRTL(s.text)) && (
-                        <span className="ml-2 px-2 py-1 bg-purple-600/20 text-purple-300 rounded text-xs">
-                          Arabic/RTL
-                        </span>
-                      )}
-                    </>
-                  ) : 'No lyrics available'}
-                </p>
-                
-                {/* Desktop Lyrics Toggle */}
-                {captions.length > 0 && (
-                  <div className="hidden lg:flex items-center space-x-4 mt-3">
-                    <button
-                      onClick={() => setShowCaptions(!showCaptions)}
-                      className={`px-3 py-1 rounded-full text-sm transition-all ${
-                        showCaptions 
-                          ? 'bg-purple-600/20 text-purple-300 border border-purple-600/30' 
-                          : 'bg-gray-800 text-gray-400 hover:text-white'
-                      }`}
-                    >
-                      {showCaptions ? 'Hide Lyrics' : 'Show Lyrics'}
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Show caption status if owner and captions aren't ready */}
-              {isOwner && mediaData.data.data.captionStatus && mediaData.data.data.captionStatus !== 'COMPLETED' ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="text-center max-w-md">
-                    <div className="flex items-center justify-center space-x-3 mb-4">
-                      {getCaptionStatusIcon(mediaData.data.data.captionStatus)}
-                      <span className="text-lg text-gray-300">
-                        {getCaptionStatusText(mediaData.data.data.captionStatus)}
-                      </span>
-                    </div>
-                    
-                    {mediaData.data.data.captionErrorMessage && (
-                      <p className="text-sm text-red-400 mb-4">
-                        {mediaData.data.data.captionErrorMessage}
-                      </p>
-                    )}
-                    
-                    <p className="text-gray-500 text-sm">
-                      {mediaData.data.data.captionStatus === 'PENDING' && 'Captions will be generated automatically'}
-                      {mediaData.data.data.captionStatus === 'QUEUED' && 'Your content is in the caption generation queue'}
-                      {mediaData.data.data.captionStatus === 'PROCESSING' && 'AI is currently transcribing your content'}
-                      {mediaData.data.data.captionStatus === 'FAILED' && 'Caption generation failed. Please try re-uploading the content.'}
-                      {mediaData.data.data.captionStatus === 'SKIPPED' && 'This content type does not support captions'}
-                    </p>
-                  </div>
-                </div>
-              ) : captions.length > 0 && showCaptions ? (
-                <div 
-                  ref={lyricsContainerRef}
-                  className="hidden lg:block flex-1 overflow-y-auto space-y-6 max-h-96 pr-4 custom-scrollbar scroll-smooth"
-                >
-                  {/* Display phrase-level captions naturally */}
-                  {captions[0].segments.map((segment, index) => {
-                    const isActive = currentTime >= segment.startTime && currentTime <= segment.endTime;
-                    const isSegmentRTL = isRTL(segment.text);
-                    const confidence = segment.confidence || 0.8;
-                    
-                    return (
-                      <div
-                        key={segment.id}
-                        ref={isActive ? activeLyricRef : null}
-                        className={`cursor-pointer transition-all duration-500 ease-out p-4 rounded-lg ${
-                          isActive ? 'transform scale-105 bg-purple-600/10' : 'hover:bg-gray-800/30'
+            {/* Right Side - Lyrics/Info with Tabs */}
+            {!sidebarCollapsed && (
+              <div className="hidden lg:flex flex-col h-full">
+                {/* Tab Header */}
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center space-x-2">
+                    {/* Tabs */}
+                    <div className="flex bg-gray-800/50 rounded-full p-1">
+                      <button
+                        onClick={() => setActiveTab('lyrics')}
+                        className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                          activeTab === 'lyrics'
+                            ? 'bg-purple-600 text-white shadow-lg'
+                            : 'text-gray-400 hover:text-white'
                         }`}
-                        style={{
-                          direction: isSegmentRTL ? 'rtl' : 'ltr',
-                          opacity: getLyricOpacity(segment)
-                        }}
-                        onClick={() => {
-                          if (mediaPlayerRef.current) {
-                            mediaPlayerRef.current.seekTo(segment.startTime);
-                          }
-                        }}
                       >
-                        <div className={`text-center ${isSegmentRTL ? 'rtl-content' : ''}`}>
-                          <div className="text-sm text-purple-300 mb-3 opacity-80">
-                            {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
+                        <div className="flex items-center space-x-2">
+                          <FileText className="w-4 h-4" />
+                          <span>Lyrics</span>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('info')}
+                        className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                          activeTab === 'info'
+                            ? 'bg-purple-600 text-white shadow-lg'
+                            : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2">
+                          <Info className="w-4 h-4" />
+                          <span>Info</span>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Collapse Button */}
+                  <button
+                    onClick={() => setSidebarCollapsed(true)}
+                    className="text-gray-400 hover:text-white transition-colors p-2 rounded-full hover:bg-gray-800/50"
+                    title="Hide sidebar"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Tab Content */}
+                <div className="flex-1 overflow-hidden">
+                  {/* Lyrics Tab */}
+                  {activeTab === 'lyrics' && (
+                    <div className="h-full flex flex-col">
+                      <div className="mb-4">
+                        <p className="text-gray-400 text-sm">
+                          {captions.length > 0 ? (
+                            <>
+                              {captions[0].segments.length} segments • Auto-generated
+                              {captions[0].segments.some(s => isRTL(s.text)) && (
+                                <span className="ml-2 px-2 py-1 bg-purple-600/20 text-purple-300 rounded text-xs">
+                                  Arabic/RTL
+                                </span>
+                              )}
+                            </>
+                          ) : 'No lyrics available'}
+                        </p>
+                        
+                        {/* Sync Button */}
+                        <AnimatePresence>
+                          {showSyncButton && (
+                            <motion.button
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -10 }}
+                              onClick={syncToCurrentLyric}
+                              className="mt-3 px-3 py-1 bg-purple-600/20 text-purple-300 border border-purple-600/30 rounded-full text-sm transition-all hover:bg-purple-600/30 flex items-center space-x-2"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              <span>Sync to current</span>
+                            </motion.button>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
+                      {/* Lyrics Content */}
+                      {isOwner && mediaData.data.data.captionStatus && mediaData.data.data.captionStatus !== 'COMPLETED' ? (
+                        <div className="flex-1 flex items-center justify-center">
+                          <div className="text-center max-w-md">
+                            <div className="flex items-center justify-center space-x-3 mb-4">
+                              {getCaptionStatusIcon(mediaData.data.data.captionStatus)}
+                              <span className="text-lg text-gray-300">
+                                {getCaptionStatusText(mediaData.data.data.captionStatus)}
+                              </span>
+                            </div>
+                            
+                            {mediaData.data.data.captionErrorMessage && (
+                              <p className="text-sm text-red-400 mb-4">
+                                {mediaData.data.data.captionErrorMessage}
+                              </p>
+                            )}
+                            
+                            <p className="text-gray-500 text-sm">
+                              {mediaData.data.data.captionStatus === 'PENDING' && 'Captions will be generated automatically'}
+                              {mediaData.data.data.captionStatus === 'QUEUED' && 'Your content is in the caption generation queue'}
+                              {mediaData.data.data.captionStatus === 'PROCESSING' && 'AI is currently transcribing your content'}
+                              {mediaData.data.data.captionStatus === 'FAILED' && 'Caption generation failed. Please try re-uploading the content.'}
+                              {mediaData.data.data.captionStatus === 'SKIPPED' && 'This content type does not support captions'}
+                            </p>
                           </div>
-                          <p className={`text-xl md:text-2xl leading-relaxed transition-all duration-300 ${
-                            isActive 
-                              ? 'text-white font-medium bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent' 
-                              : 'text-gray-300'
-                          } ${isSegmentRTL ? 'font-arabic' : ''} hover:text-white`}
-                          style={{ 
-                            fontFamily: isSegmentRTL ? 'Arial, "Noto Sans Arabic", sans-serif' : 'inherit'
-                          }}>
-                            {segment.text}
-                          </p>
+                        </div>
+                      ) : captions.length > 0 && showCaptions ? (
+                        <div 
+                          ref={lyricsContainerRef}
+                          className="flex-1 overflow-y-auto space-y-4 pr-4 custom-scrollbar"
+                          onScroll={handleLyricsScroll}
+                        >
+                          {/* Center-focused lyrics display */}
+                          <div className="min-h-full flex flex-col justify-center py-12">
+                            {lyricsContext && (
+                              <>
+                                {/* Previous segment */}
+                                {lyricsContext.previous && (
+                                  <motion.div 
+                                    key={`prev-${lyricsContext.previous.id}`}
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 0.4, y: 0 }}
+                                    exit={{ opacity: 0, y: -20 }}
+                                    transition={{ duration: 0.4, ease: "easeInOut" }}
+                                    className="cursor-pointer transition-all duration-300 p-4 rounded-lg hover:opacity-60"
+                                    onClick={() => {
+                                      if (mediaPlayerRef.current) {
+                                        mediaPlayerRef.current.seekTo(lyricsContext.previous!.startTime);
+                                      }
+                                    }}
+                                  >
+                                    <div className="text-center">
+                                      <div className="text-xs text-purple-300 mb-2 opacity-60">
+                                        {formatTime(lyricsContext.previous.startTime)} - {formatTime(lyricsContext.previous.endTime)}
+                                      </div>
+                                      <p className="text-lg text-gray-400" 
+                                        style={{ 
+                                          direction: isRTL(lyricsContext.previous.text) ? 'rtl' : 'ltr',
+                                          fontFamily: isRTL(lyricsContext.previous.text) ? 'Arial, "Noto Sans Arabic", sans-serif' : 'inherit'
+                                        }}>
+                                        {lyricsContext.previous.text}
+                                      </p>
+                                    </div>
+                                  </motion.div>
+                                )}
+
+                                {/* Current segment */}
+                                {lyricsContext.current && (
+                                  <motion.div
+                                    key={`current-${lyricsContext.current.id}`}
+                                    initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                                    animate={{ 
+                                      opacity: 1, 
+                                      scale: lyricsContext.activeIndex === lyricsContext.currentIndex ? 1.05 : 1, 
+                                      y: 0 
+                                    }}
+                                    exit={{ opacity: 0, scale: 0.95, y: -20 }}
+                                    transition={{ duration: 0.5, ease: "easeInOut" }}
+                                    ref={lyricsContext.activeIndex === lyricsContext.currentIndex ? activeLyricRef : null}
+                                    className={`cursor-pointer transition-all duration-500 p-6 rounded-xl ${
+                                      lyricsContext.activeIndex === lyricsContext.currentIndex 
+                                        ? 'bg-purple-600/10 shadow-xl border border-purple-500/20' 
+                                        : 'hover:bg-gray-800/30'
+                                    }`}
+                                    onClick={() => {
+                                      if (mediaPlayerRef.current) {
+                                        mediaPlayerRef.current.seekTo(lyricsContext.current!.startTime);
+                                      }
+                                    }}
+                                  >
+                                    <div className="text-center">
+                                      <div className="text-sm text-purple-300 mb-3 opacity-80">
+                                        {formatTime(lyricsContext.current.startTime)} - {formatTime(lyricsContext.current.endTime)}
+                                      </div>
+                                      <p className={`text-2xl leading-relaxed transition-all duration-500 font-medium ${
+                                        lyricsContext.activeIndex === lyricsContext.currentIndex
+                                          ? 'text-white bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent'
+                                          : 'text-gray-300 hover:text-white'
+                                      }`}
+                                      style={{ 
+                                        direction: isRTL(lyricsContext.current.text) ? 'rtl' : 'ltr',
+                                        fontFamily: isRTL(lyricsContext.current.text) ? 'Arial, "Noto Sans Arabic", sans-serif' : 'inherit'
+                                      }}>
+                                        {lyricsContext.current.text}
+                                      </p>
+                                    </div>
+                                  </motion.div>
+                                )}
+
+                                {/* Next segment */}
+                                {lyricsContext.next && (
+                                  <motion.div 
+                                    key={`next-${lyricsContext.next.id}`}
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 0.4, y: 0 }}
+                                    exit={{ opacity: 0, y: -20 }}
+                                    transition={{ duration: 0.4, ease: "easeInOut" }}
+                                    className="cursor-pointer transition-all duration-300 p-4 rounded-lg hover:opacity-60"
+                                    onClick={() => {
+                                      if (mediaPlayerRef.current) {
+                                        mediaPlayerRef.current.seekTo(lyricsContext.next!.startTime);
+                                      }
+                                    }}
+                                  >
+                                    <div className="text-center">
+                                      <div className="text-xs text-purple-300 mb-2 opacity-60">
+                                        {formatTime(lyricsContext.next.startTime)} - {formatTime(lyricsContext.next.endTime)}
+                                      </div>
+                                      <p className="text-lg text-gray-400"
+                                        style={{ 
+                                          direction: isRTL(lyricsContext.next.text) ? 'rtl' : 'ltr',
+                                          fontFamily: isRTL(lyricsContext.next.text) ? 'Arial, "Noto Sans Arabic", sans-serif' : 'inherit'
+                                        }}>
+                                        {lyricsContext.next.text}
+                                      </p>
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex-1 flex items-center justify-center text-center">
+                          <div>
+                            <div className="text-6xl mb-4 opacity-20">🎤</div>
+                            <p className="text-gray-400 text-lg">
+                              {captions.length === 0 ? 'No lyrics available' : 'Lyrics hidden'}
+                            </p>
+                            <p className="text-gray-500 text-sm mt-2">
+                              {captions.length === 0 ? 'Lyrics will appear here when available' : 'Click "Show Lyrics" to display them'}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Info Tab */}
+                  {activeTab === 'info' && (
+                    <div className="space-y-6">
+                      {/* Creator Info */}
+                      <div className="bg-gray-800/30 rounded-xl p-6">
+                        <h3 className="text-lg font-semibold mb-4">Creator</h3>
+                        <div className="flex items-center space-x-4">
+                          <img
+                            src={mediaData.data.data.user?.photoURL || "/default-avatar.png"}
+                            alt={mediaData.data.data.user?.displayName || "Creator"}
+                            className="w-12 h-12 rounded-full border-2 border-purple-600/50"
+                          />
+                          <div>
+                            <h4 className="font-semibold text-white">
+                              {mediaData.data.data.user?.displayName || "Unknown Creator"}
+                            </h4>
+                            <p className="text-gray-400 text-sm">Content Creator</p>
+                            {mediaData.data.data.originalAuthor && mediaData.data.data.originalAuthor !== mediaData.data.data.user?.displayName && (
+                              <p className="text-purple-300 text-xs mt-1">
+                                Original: {mediaData.data.data.originalAuthor}
+                              </p>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="hidden lg:flex flex-1 items-center justify-center text-center">
-                  <div>
-                    <div className="text-6xl mb-4 opacity-20">🎤</div>
-                    <p className="text-gray-400 text-lg">
-                      {captions.length === 0 ? 'No lyrics available' : 'Lyrics hidden'}
-                    </p>
-                    <p className="text-gray-500 text-sm mt-2">
-                      {captions.length === 0 ? 'Lyrics will appear here when available' : 'Click "Show Lyrics" to display them'}
-                    </p>
-                  </div>
-                </div>
-              )}
 
-            </div>
+                      {/* Statistics */}
+                      <div className="bg-gray-800/30 rounded-xl p-6">
+                        <h3 className="text-lg font-semibold mb-4">Statistics</h3>
+                        <div className="space-y-3">
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">Views</span>
+                            <span className="text-white">{mediaData.data.data.viewCount || 0}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">Likes</span>
+                            <span className="text-white">{likeCount}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">Comments</span>
+                            <span className="text-white">{comments.length}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">Duration</span>
+                            <span className="text-white">{formatTime(duration)}</span>
+                          </div>
+                          {mediaData.data.data.size && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">File Size</span>
+                              <span className="text-white">
+                                {(parseInt(mediaData.data.data.size) / (1024 * 1024)).toFixed(1)} MB
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Source & Format */}
+                      <div className="bg-gray-800/30 rounded-xl p-6">
+                        <h3 className="text-lg font-semibold mb-4">Source & Format</h3>
+                        <div className="space-y-3">
+                          {mediaData.data.data.platform && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Platform</span>
+                              <span className="text-white capitalize">
+                                {mediaData.data.data.platform.toLowerCase().replace('_', ' ')}
+                              </span>
+                            </div>
+                          )}
+                          {mediaData.data.data.format && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Format</span>
+                              <span className="text-white uppercase">{mediaData.data.data.format}</span>
+                            </div>
+                          )}
+                          {mediaData.data.data.files?.[0]?.mimeType && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Type</span>
+                              <span className="text-white">{mediaData.data.data.files[0].mimeType}</span>
+                            </div>
+                          )}
+                          {mediaData.data.data.originalUrl && (
+                            <div className="flex justify-between items-center">
+                              <span className="text-gray-400">Original Source</span>
+                              <a 
+                                href={mediaData.data.data.originalUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-purple-400 hover:text-purple-300 flex items-center space-x-1 transition-colors"
+                              >
+                                <span className="text-sm">View</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Dates */}
+                      <div className="bg-gray-800/30 rounded-xl p-6">
+                        <h3 className="text-lg font-semibold mb-4">Timeline</h3>
+                        <div className="space-y-3">
+                          {mediaData.data.data.publishedAt && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Originally Published</span>
+                              <span className="text-white text-sm">
+                                {new Date(mediaData.data.data.publishedAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">Archived</span>
+                            <span className="text-white text-sm">
+                              {new Date(mediaData.data.data.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                          {mediaData.data.data.captionGeneratedAt && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">Captions Generated</span>
+                              <span className="text-white text-sm">
+                                {new Date(mediaData.data.data.captionGeneratedAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* AI Information */}
+                      {(mediaData.data.data.aiKeywords?.length > 0 || mediaData.data.data.aiSummary) && (
+                        <div className="bg-gray-800/30 rounded-xl p-6">
+                          <h3 className="text-lg font-semibold mb-4">AI Analysis</h3>
+                          {mediaData.data.data.aiKeywords?.length > 0 && (
+                            <div className="mb-4">
+                              <span className="text-gray-400 text-sm block mb-2">Keywords</span>
+                              <div className="flex flex-wrap gap-2">
+                                {mediaData.data.data.aiKeywords.map((keyword, index) => (
+                                  <span 
+                                    key={index}
+                                    className="px-2 py-1 bg-purple-600/20 text-purple-300 rounded-full text-xs"
+                                  >
+                                    {keyword}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {mediaData.data.data.aiSummary && mediaData.data.data.aiSummary !== "AI-generated summary will be available soon" && (
+                            <div>
+                              <span className="text-gray-400 text-sm block mb-2">Summary</span>
+                              <p className="text-gray-300 text-sm leading-relaxed">
+                                {mediaData.data.data.aiSummary}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Description */}
+                      {mediaData.data.data.description && (
+                        <div className="bg-gray-800/30 rounded-xl p-6">
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-lg font-semibold">Description</h3>
+                            {mediaData.data.data.description.length > 200 && (
+                              <button
+                                onClick={() => setShowFullDescription(!showFullDescription)}
+                                className="text-purple-400 hover:text-purple-300 text-sm px-3 py-1 rounded-full bg-purple-600/20 hover:bg-purple-600/30 transition-all"
+                              >
+                                {showFullDescription ? "Show less" : "Show more"}
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-gray-300 leading-relaxed">
+                            {showFullDescription
+                              ? mediaData.data.data.description
+                              : mediaData.data.data.description.slice(0, 200) +
+                                (mediaData.data.data.description.length > 200 ? "..." : "")}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Tags */}
+                      {mediaData.data.data.hashtags?.length > 0 && (
+                        <div className="bg-gray-800/30 rounded-xl p-6">
+                          <h3 className="text-lg font-semibold mb-4">Tags</h3>
+                          <div className="flex flex-wrap gap-2">
+                            {mediaData.data.data.hashtags.map((tag, index) => (
+                              <span 
+                                key={index}
+                                className="px-3 py-1 bg-gray-700/50 text-gray-300 rounded-full text-sm flex items-center space-x-1"
+                              >
+                                <span>#</span>
+                                <span>{tag}</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Expand Sidebar Button */}
+            {sidebarCollapsed && (
+              <motion.button
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                onClick={() => setSidebarCollapsed(false)}
+                className="hidden lg:flex fixed right-6 top-1/2 transform -translate-y-1/2 bg-gray-800/80 backdrop-blur-sm text-gray-300 hover:text-white hover:bg-gray-700/80 transition-all p-3 rounded-full shadow-xl"
+                title="Show sidebar"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </motion.button>
+            )}
           </div>
 
           {/* Comments Section */}
@@ -1110,6 +1603,61 @@ export function WatchPage() {
           </div>
         </div>
       </div>
+
+      {/* Mobile Info Modal */}
+      <Modal
+        isOpen={showMobileInfo}
+        onClose={() => setShowMobileInfo(false)}
+        title="Track Info"
+        maxWidth="md"
+      >
+        <div className="p-6 space-y-6">
+          {/* Creator Info */}
+          <div className="flex items-center space-x-4">
+            <img
+              src={mediaData.data.data.user?.photoURL || "/default-avatar.png"}
+              alt={mediaData.data.data.user?.displayName || "Creator"}
+              className="w-12 h-12 rounded-full border-2 border-purple-600/50"
+            />
+            <div>
+              <h4 className="font-semibold text-white">
+                {mediaData.data.data.user?.displayName || "Unknown Creator"}
+              </h4>
+              <p className="text-gray-400 text-sm">Content Creator</p>
+            </div>
+          </div>
+
+          {/* Stats */}
+          <div className="space-y-3">
+            <div className="flex justify-between">
+              <span className="text-gray-400">Views</span>
+              <span className="text-white">{mediaData.data.data.viewCount || 0}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Likes</span>
+              <span className="text-white">{likeCount}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Comments</span>
+              <span className="text-white">{comments.length}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Duration</span>
+              <span className="text-white">{formatTime(duration)}</span>
+            </div>
+          </div>
+
+          {/* Description */}
+          {mediaData.data.data.description && (
+            <div>
+              <h4 className="font-semibold mb-2">Description</h4>
+              <p className="text-gray-300 leading-relaxed text-sm">
+                {mediaData.data.data.description}
+              </p>
+            </div>
+          )}
+        </div>
+      </Modal>
 
       {/* Hidden Audio Player */}
       <div className="hidden">

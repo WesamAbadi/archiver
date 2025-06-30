@@ -26,7 +26,7 @@ export const DynamicBackground: React.FC<DynamicBackgroundProps> = ({
 
   // Generate random but organized static orb layout
   const orbs = useMemo(() => {
-    if (!colors || variant === 'mobile') return [];
+    if (!colors) return [];
 
     const colorPalette = [colors.dominant, colors.secondary, colors.accent];
     const orbCount = Math.floor(Math.random() * 4) + 3; // 3-6 orbs
@@ -55,7 +55,7 @@ export const DynamicBackground: React.FC<DynamicBackgroundProps> = ({
         id: `orb-${i}`,
         x: Math.max(5, Math.min(95, cell.x + randomOffsetX)),
         y: Math.max(5, Math.min(95, cell.y + randomOffsetY)),
-        size: Math.floor(Math.random() * 200) + 150, // 150-350px
+        size: variant === 'mobile' ? Math.floor(Math.random() * 150) + 100 : Math.floor(Math.random() * 200) + 150, // Smaller on mobile
         color: colorPalette[colorIndex],
         opacity: Math.random() * 0.2 + 0.1, // 0.1-0.3
         blur: Math.floor(Math.random() * 2) + 2, // 2-3 (for blur-2xl to blur-3xl)
@@ -71,40 +71,7 @@ export const DynamicBackground: React.FC<DynamicBackgroundProps> = ({
     );
   }
 
-  if (variant === 'mobile' && imageUrl) {
-    return (
-      <div className={`fixed inset-0 ${className}`}>
-        {/* Base image background */}
-        <div 
-          className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{ backgroundImage: `url(${imageUrl})` }}
-        />
-        
-        {/* Blur overlay */}
-        <div className="absolute inset-0 backdrop-blur-3xl bg-black/40" />
-        
-        {/* Glass effect with extracted colors */}
-        {colors && (
-          <div 
-            className="absolute inset-0 backdrop-blur-sm"
-            style={{
-              background: `linear-gradient(135deg, 
-                ${colors.dominant}20, 
-                ${colors.secondary}15, 
-                ${colors.accent}10,
-                transparent 70%
-              )`
-            }}
-          />
-        )}
-        
-        {/* Additional ice/frost effect */}
-        <div className="absolute inset-0 bg-gradient-to-b from-white/5 via-transparent to-black/20" />
-      </div>
-    );
-  }
-
-  // Desktop variant - use colors without stretching image
+  // Use the same design for both mobile and desktop
   return (
     <div className={`fixed inset-0 ${className}`}>
       {colors ? (

@@ -31,9 +31,9 @@ function App() {
       <AuthProvider>
         <SocketProvider>
           <UploadProvider>
-            <div className="min-h-screen bg-gray-900">
+            <div className="min-h-screen bg-gray-900 flex flex-col">
               <Navbar />
-              <div className="pb-20 md:pb-0 md:pt-14">
+              <main className="flex-1 w-full">
                 <Routes>
                   <Route path="/login" element={<LoginPage />} />
                   <Route path="/" element={<HomePage />} />
@@ -64,7 +64,7 @@ function App() {
                     }
                   />
                 </Routes>
-              </div>
+              </main>
             </div>
           </UploadProvider>
         </SocketProvider>
