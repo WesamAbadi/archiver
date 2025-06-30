@@ -33,7 +33,7 @@ function App() {
           <UploadProvider>
             <div className="min-h-screen bg-gray-900 flex flex-col">
               <Navbar />
-              <main className="flex-1 w-full">
+              <main className="flex-1 w-full pb-safe pb-16 md:pb-0">
                 <Routes>
                   <Route path="/login" element={<LoginPage />} />
                   <Route path="/" element={<HomePage />} />

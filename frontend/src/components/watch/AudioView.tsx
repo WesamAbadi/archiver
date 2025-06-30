@@ -7,7 +7,7 @@ import {
   AlertCircle,
   Loader2
 } from 'lucide-react';
-import { EnhancedCommentSection } from '../common';
+import { CommentSection } from '../common';
 import { DynamicBackground } from '../DynamicBackground';
 import ErrorBoundary from '../ErrorBoundary';
 import MediaPlayer from '../MediaPlayer';
@@ -149,7 +149,7 @@ export const AudioView = (props: any) => {
   
             {/* Comments Section */}
             <div className="mt-12">
-              <EnhancedCommentSection
+              <CommentSection
                 comments={comments}
                 onAddComment={handleAddComment}
                 user={user ? {

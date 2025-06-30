@@ -273,7 +273,7 @@ export function WatchPage() {
       )
       
       if (response.data.success) {
-        setComments([response.data.data, ...comments])
+        setComments([response.data.data.comment, ...comments])
         toast.success('Comment added!')
         queryClient.invalidateQueries(['public-media', id]);
       }

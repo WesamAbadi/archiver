@@ -148,7 +148,7 @@ export default function HomePage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 pt-16 md:pt-20 pb-20 md:pb-8">
+    <div className="min-h-screen bg-gray-900 pt-16 md:pt-20 md:pb-8">
       <div className="max-w-[2400px] mx-auto px-3 sm:px-4 lg:px-6">
         {/* Filter Pills */}
         <div className="flex flex-col sm:flex-row gap-4 mb-6">
@@ -233,7 +233,7 @@ export default function HomePage() {
                 className="group"
               >
                 {/* Thumbnail */}
-                <div className="relative bg-gray-800 rounded-lg overflow-hidden mb-2">
+                <div className="relative aspect-square bg-gray-800 rounded-lg overflow-hidden mb-2">
                   {item.thumbnailUrl ? (
                     <img
                       src={item.thumbnailUrl}

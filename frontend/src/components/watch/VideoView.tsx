@@ -8,7 +8,7 @@ import {
   MessageCircle,
   Share2
 } from 'lucide-react';
-import { Card, EnhancedCommentSection } from '../common';
+import { Card, CommentSection } from '../common';
 import { DynamicBackground } from '../DynamicBackground';
 import PlyrVideoPlayer from '../PlyrVideoPlayer';
 
@@ -215,7 +215,7 @@ export const VideoView: React.FC<VideoViewProps> = ({
 
               {/* Comments Section */}
               <Card variant="default" className="p-6">
-                <EnhancedCommentSection
+                <CommentSection
                   comments={comments}
                   onAddComment={handleAddComment}
                   user={user ? {
