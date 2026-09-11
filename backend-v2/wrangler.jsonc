@@ -1,0 +1,41 @@
+{
+  // ArchiveDrop API — Cloudflare Worker
+  // Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "archivedrop-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-11",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // ---------------------------------------------------------------------------
+  // Bindings
+  // ---------------------------------------------------------------------------
+  // R2 bucket for media storage (server-side ops; presigning uses S3 tokens)
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "archivedrop-media"
+    }
+  ],
+
+  // Postgres via Hyperdrive — run `npx wrangler hyperdrive create archivedrop-db \
+  //   --connection-string="postgres://user:pass@host/db"` and paste the ID here.
+  // Local dev without a Hyperdrive binding falls back to DATABASE_URL (see src/db/client.ts).
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "REPLACE_WITH_HYPERDRIVE_ID"
+    }
+  ],
+
+  // Non-secret env vars. Secrets (JWT_SECRET, R2 tokens, GOOGLE_CLIENT_ID) go via:
+  //   npx wrangler secret put <NAME>
+  "vars": {
+    "R2_BUCKET_NAME": "archivedrop-media",
+    "CORS_ORIGINS": "http://localhost:5173"
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

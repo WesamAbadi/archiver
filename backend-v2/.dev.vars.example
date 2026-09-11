@@ -1,0 +1,7 @@
+# Copy to .dev.vars for `wrangler dev` — secrets as plain env vars locally.
+# (.dev.vars is gitignored)
+GOOGLE_CLIENT_ID=your-google-client-id
+JWT_SECRET=dev-only-secret-change-me-32-chars-min
+R2_ACCOUNT_ID=your-cloudflare-account-id
+R2_ACCESS_KEY_ID=your-r2-s3-token-id
+R2_SECRET_ACCESS_KEY=your-r2-s3-token-secret
