@@ -29,7 +29,13 @@ app.use('*', (c, next) => {
 
   return cors({
     origin: origins,
-    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    // PUT is here because the caption editor saves segments with
+    // PUT /api/media/:id/captions/:captionId. Omitting it meant the browser's
+    // preflight was rejected and saving a transcript failed with a bare
+    // "Could not reach the server" — while every curl-based test passed, since
+    // curl does not send a preflight. Any new method used by the frontend must
+    // be added here or the request dies in the browser and nowhere else.
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     maxAge: 86400,
   })(c, next);

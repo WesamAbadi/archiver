@@ -99,6 +99,49 @@ rm -f node_modules/.cache/wrangler/wrangler-account.json
 
 Or pin the account explicitly for a command: `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler ...`.
 
+**Reads return stale data — a write succeeds, then the next read doesn't see it (`SUM(size)` reads back 0).**
+**Hyperdrive query caching is ON by default** (`"caching": { "disabled": false }`) and
+it caches by exact SQL text. Any query that is byte-identical on every call — an
+aggregate like `SELECT COALESCE(SUM(size),0) …` with a fixed `WHERE` — becomes a
+permanent cache hit and keeps serving the result from whenever it was first run.
+
+This is not a small annoyance. It breaks every read-after-write path, most
+visibly `GET /api/media/quota` (upload succeeds, quota stays 0) and
+`GET /api/media/:id/caption-status` (**transcription appears stuck forever**,
+because the polling SQL is identical on every poll). It was worth ~nothing here
+— a single-admin archive — while inventing a whole class of phantom bugs.
+
+Fix (connection pooling and edge routing are unaffected):
+
+```bash
+npx wrangler hyperdrive get <config-id>                      # expect caching.disabled: true
+npx wrangler hyperdrive update <config-id> --caching-disabled
+```
+
+`scripts/smoke-storage.sh` asserts this in step 5, and prints these instructions
+when it fails — a direct DB check showing the row exists while the API reads 0 is
+the signature.
+
+## Verifying the storage path
+
+The two scripts below are the difference between "it deploys" and "it works".
+Both need the admin password, because they log in against the real API:
+
+```bash
+ADMIN_PASSWORD='…' ./scripts/smoke-storage.sh     # login → presign → PUT → confirm → quota → delete
+ADMIN_PASSWORD='…' ./scripts/verify-playback.sh   # signed playback URL + real R2 deletion
+```
+
+`smoke-storage.sh` step 3 is the important one: it PUTs real bytes to R2, which
+is the only way to prove the S3 token can **write**. A read-only token signs
+presigned URLs happily (signing is local math) and only fails when bytes are
+sent — so this cannot be verified by inspecting the token.
+
+`verify-playback.sh` additionally asserts that the bucket is **private** (the raw
+key must be rejected without a signature) and that deleting an item really
+removes the R2 object, confirmed by re-requesting the same signed URL and
+expecting a 404.
+
 ## Upload flow (presigned, nothing big transits the Worker)
 
 ```

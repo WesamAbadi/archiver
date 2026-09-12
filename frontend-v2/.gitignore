@@ -1,0 +1,21 @@
+node_modules
+dist
+dist-ssr
+
+# wrangler's own state (deploy config, local caches) — regenerated per deploy
+.wrangler
+
+# Local env files. NOTE: .env.production IS tracked on purpose — it holds the
+# API origin (not a secret) so a fresh clone builds against the right Worker.
+.env
+.env.local
+.env.*.local
+
+*.local
+.DS_Store
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example

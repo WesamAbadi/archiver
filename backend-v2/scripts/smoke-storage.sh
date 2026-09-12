@@ -92,7 +92,22 @@ echo
 echo "5. Storage quota"
 QUOTA=$(curl -s "$API_URL/api/media/quota" -H "$AUTH")
 USED=$(printf '%s' "$QUOTA" | json "d['data']['used']")
-[ "$USED" -ge "$SIZE" ] || fail "quota did not increase: $QUOTA"
+# This is the check that caught a real outage: the row existed in Postgres, the
+# list endpoint returned it with the right size, yet SUM(size) read back 0.
+# Cause was Hyperdrive QUERY CACHING serving a result cached from when the table
+# was empty — the SQL for this aggregate is byte-identical on every call, so it
+# was a perfect cache hit. Verify with:
+#   npx wrangler hyperdrive get <config-id>     # want caching.disabled: true
+[ "$USED" -ge "$SIZE" ] || fail "quota did not increase: $QUOTA
+
+  The upload and file row succeeded, so the data IS there. If a direct psql
+  query shows the row but this reads 0, it is almost certainly Hyperdrive query
+  caching returning a stale result. Check the config:
+
+    npx wrangler hyperdrive get <config-id>            # expect caching.disabled: true
+    npx wrangler hyperdrive update <config-id> --caching-disabled
+
+  Default caching is ON, which also means stale reads everywhere else."
 pass "quota reflects the new file (used=$USED bytes)"
 
 # --- 6. delete + cleanup ----------------------------------------------------

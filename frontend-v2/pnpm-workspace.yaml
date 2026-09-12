@@ -1,0 +1,16 @@
+# pnpm 11 build-script approvals.
+#
+# pnpm blocks dependency install scripts by default and, when it does, it writes
+# this file itself — with the literal placeholder values
+# `set this to true or false`. Those are not booleans, so leaving them in place
+# makes the next `pnpm install` re-prompt (or fail with ERR_PNPM_IGNORED_BUILDS).
+#
+# Both of these genuinely need their build step:
+#   esbuild  — links the platform binary Vite depends on
+#   workerd  — the Workers runtime that Wrangler runs locally (miniflare)
+#
+# No `packages:` key on purpose: this is a single-package project, so this file
+# only carries settings.
+allowBuilds:
+  esbuild: true
+  workerd: true

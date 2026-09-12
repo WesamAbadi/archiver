@@ -17,7 +17,7 @@ import { requireAuth } from '../auth';
 import * as mediaService from '../services/media';
 import * as captionService from '../services/captions';
 import { getStorageQuota } from '../services/users';
-import { isAllowedMimeType } from '../services/r2';
+import { isAllowedMimeType, presignedGetUrl } from '../services/r2';
 
 export const mediaRoutes = new Hono<AppEnv>();
 
@@ -56,6 +56,36 @@ mediaRoutes.get('/:id', async (c) => {
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   return c.json({ success: true, data: item });
+});
+
+// ---------------------------------------------------------------------------
+// Playback: short-lived presigned GET for a stored file
+// ---------------------------------------------------------------------------
+
+/** 6 hours — comfortably longer than a long track, short enough to be safe. */
+const PLAYBACK_URL_TTL_SECONDS = 6 * 60 * 60;
+
+/**
+ * Presigned GET for one file of one media item.
+ *
+ * The bucket is private, so the raw key in `files[].filename` is NOT playable.
+ * Playback URLs are short-lived and issued here rather than returned in list
+ * responses — embedding them in `/media` would mean N signatures per page load
+ * and URLs that expire while the page sits open.
+ */
+mediaRoutes.get('/:id/files/:fileId/url', async (c) => {
+  const admin = c.get('admin');
+
+  const item = await mediaService.getMediaItem(c.get('db'), c.req.param('id'), admin.id);
+  if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
+
+  const file = item.files.find((f) => f.id === c.req.param('fileId'));
+  if (!file) return c.json({ success: false, error: 'File not found' }, 404);
+
+  const expiresAt = new Date(Date.now() + PLAYBACK_URL_TTL_SECONDS * 1000);
+  const url = await presignedGetUrl(c.env, file.filename, PLAYBACK_URL_TTL_SECONDS);
+
+  return c.json({ success: true, data: { url, expiresAt: expiresAt.toISOString() } });
 });
 
 const updateSchema = z.object({
