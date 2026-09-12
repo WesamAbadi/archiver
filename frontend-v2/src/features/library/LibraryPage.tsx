@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { LibraryBig, Plus, Search } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -35,8 +36,9 @@ function matchesFilter(status: CaptionStatus, filter: string): boolean {
 }
 
 export function LibraryPage() {
+  const navigate = useNavigate();
   const [page, setPage] = useState(1);
-  const [query, setQuery] = useState('');
+  const [term, setTerm] = useState('');
   const [filter, setFilter] = useState<string>('all');
   const [uploadOpen, setUploadOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<MediaItem | null>(null);
@@ -45,25 +47,22 @@ export function LibraryPage() {
   const deleteMedia = useDeleteMedia();
 
   /**
-   * Search and filtering are client-side over the current page.
-   *
-   * Deliberate: the API has no search endpoint yet, and pretending to search the
-   * whole archive while only filtering 24 loaded rows would be a lie. Filtering
-   * what's on screen is honest about its scope.
+   * Status filtering is still client-side, over the page on screen, and the
+   * group is labelled that way. Text search is NOT: the box below hands off to
+   * /search, which runs in Postgres across the whole archive — including inside
+   * transcripts. Filtering 24 loaded rows and calling it search was the old
+   * behaviour, and it only ever told you about the page you were already on.
    */
-  const visible = useMemo(() => {
-    const items = list.data?.items ?? [];
-    const needle = query.trim().toLowerCase();
+  const visible = useMemo(
+    () => (list.data?.items ?? []).filter((item) => matchesFilter(item.captionStatus, filter)),
+    [list.data, filter],
+  );
 
-    return items.filter((item) => {
-      if (!matchesFilter(item.captionStatus, filter)) return false;
-      if (!needle) return true;
-      return (
-        item.title.toLowerCase().includes(needle) ||
-        item.tags.some((tag) => tag.toLowerCase().includes(needle))
-      );
-    });
-  }, [list.data, query, filter]);
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const q = term.trim();
+    if (q) navigate(`/search?q=${encodeURIComponent(q)}`);
+  }
 
   async function confirmDelete() {
     if (!pendingDelete) return;
@@ -97,21 +96,22 @@ export function LibraryPage() {
         </Button>
       </header>
 
-      {(hasItems || query || filter !== 'all') && (
+      {hasItems && (
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="sm:max-w-xs sm:flex-1">
+          <form onSubmit={submitSearch} className="sm:max-w-xs sm:flex-1">
             <TextField
-              label="Search"
+              label="Search the archive"
               hideLabel
-              placeholder="Search titles and tags…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search titles and lyrics…"
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
               leading={<Search className="size-4" />}
-              aria-label="Search the library"
+              aria-label="Search the archive"
+              hint="Press Enter to search everything, including lyrics."
             />
-          </div>
+          </form>
 
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by status">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter this page by status">
             {FILTERS.map((option) => (
               <button
                 key={option.id}
@@ -161,23 +161,16 @@ export function LibraryPage() {
             </Button>
           }
         />
-      ) : visible.length === 0 ? (
-        <EmptyState
-          icon={<Search className="size-5" />}
-          title="No matches"
-          description="Nothing on this page matches your search or filter."
-          action={
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setQuery('');
-                setFilter('all');
-              }}
-            >
-              Clear filters
-            </Button>
-          }
-        />
+      ) : visible.length === 0 ? (          <EmptyState
+            icon={<Search className="size-5" />}
+            title="Nothing with that status here"
+            description="Filters apply to this page only. Use search to look across the whole archive."
+            action={
+              <Button variant="secondary" onClick={() => setFilter('all')}>
+                Clear filter
+              </Button>
+            }
+          />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {visible.map((item) => (

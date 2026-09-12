@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, FileAudio, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -23,6 +23,9 @@ import { ActiveCaption, TranscriptPanel } from './TranscriptPanel';
 export function WatchPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  /** `?t=83.5` — a search result matched this item's lyrics at that moment. */
+  const startAt = Number(searchParams.get('t') ?? '');
 
   const item = useMediaItem(id);
   const file = item.data?.files[0];
@@ -59,6 +62,25 @@ export function WatchPage() {
       element.removeEventListener('seeked', onTimeUpdate);
     };
   }, [playback.data?.url]);
+
+  // Jump to the matched lyric when arriving from a search result.
+  //
+  // Deliberately not a mount-time seek: the media element only exists once the
+  // signed URL resolves, so the first run of this effect usually finds no
+  // element. `seekedFor` records which item has been positioned, because
+  // navigating between two watch pages reuses this component instance and a
+  // plain ref would suppress the second seek.
+  const seekedFor = useRef<string | null>(null);
+  useEffect(() => {
+    const element = mediaRef.current;
+    if (!element || !id) return;
+    if (!Number.isFinite(startAt) || startAt <= 0) return;
+    if (seekedFor.current === id) return;
+
+    element.currentTime = startAt;
+    setCurrentTime(startAt);
+    seekedFor.current = id;
+  }, [id, startAt, playback.data?.url]);
 
   // When a transcription run finishes, refresh the item so the status badge and
   // transcript update without a manual reload.

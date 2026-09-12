@@ -49,25 +49,29 @@ Worker).
 
 ```
 src/
-  lib/            env, api client, cn, formatters, rtl, useUndoableState
-  components/ui/  Button, TextField, Modal, Badge, Spinner, EmptyState, toast
+  lib/            env, api client, cn, formatters, rtl, useUndoableState, useDebounced
+  components/ui/  Button, TextField, Modal, Badge, Spinner, EmptyState, Highlight, toast
   components/     AppShell (nav + quota meter)
   features/
     auth/         session store, hooks, LoginPage, guards
     media/        every media + caption query/mutation (one place)
     library/      LibraryPage, MediaCard, UploadDialog
+    search/       SearchPage + its queries (results keyed by term, not by page)
     watch/        WatchPage, TranscriptPanel
     editor/       CaptionEditorPage
     settings/     SettingsPage
 ```
 
-Two conventions worth keeping:
+Three conventions worth keeping:
 
 - **Nothing calls `fetch` directly.** Everything goes through `src/lib/api.ts`,
   so auth headers, error shape and 401 handling can't drift per page.
 - **Nothing invents a colour.** Use the Tailwind tokens from `src/index.css`
   (`bg-surface`, `text-ink-muted`, `border-border-strong`…). They are real
   `@theme` tokens, so they generate utilities.
+- **`MediaCard` is the only card.** The library and search results render the
+  same component; search just passes `match`, which adds the matched-field chips
+  and the lyric line and retargets the card's link to `/watch/:id?t=…`.
 
 ---
 

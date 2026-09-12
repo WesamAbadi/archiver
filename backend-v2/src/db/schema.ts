@@ -12,6 +12,7 @@
 import {
   pgTable,
   pgEnum,
+  customType,
   text,
   varchar,
   boolean,
@@ -22,7 +23,41 @@ import {
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { relations, sql } from 'drizzle-orm';
+import { relations, sql, type SQL } from 'drizzle-orm';
+
+// ---------------------------------------------------------------------------
+// Search support (Phase 5 — see MIGRATION_PLAN.md §5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Postgres `tsvector`. Drizzle has no first-class type for it, and the search
+ * columns are generated from the row's own columns, so the app never writes
+ * them — this exists so the schema can describe them and migrations stay in
+ * sync with what the database actually has.
+ */
+const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
+
+/**
+ * The `archivedrop_normalize_text*` functions are created by migration 0002 —
+ * Drizzle cannot model functions, so it cannot generate them. They are what
+ * makes Arabic search work here:
+ *
+ *  - strips harakat/tashkeel and the tatweel elongation character
+ *  - unifies letter variants (أإآٱ→ا, ىئ→ي, ة→ه, ؤ→و, ک→ك, ی→ي)
+ *  - maps Arabic-Indic digits onto ASCII
+ *  - removes the definite article `ال` (and وال/بال/فال/كال/لل) from each word,
+ *    so `الصباح` and `صباح` are the same term
+ *  - lowercases Latin and collapses whitespace
+ *
+ * A generated column's expression must be IMMUTABLE, and `array_to_string` is
+ * only STABLE in Postgres, which is why the array form is its own declared
+ * immutable wrapper rather than an inline call.
+ *
+ * Changing any of this requires a migration that DROPS and re-adds the
+ * generated columns and their indexes — the vectors have to be recomputed.
+ */
+const normalizeText = (expr: SQL) => sql`archivedrop_normalize_text(${expr})`;
+const normalizeTexts = (expr: SQL) => sql`archivedrop_normalize_texts(${expr})`;
 
 // ---------------------------------------------------------------------------
 // Enums (values match the old Prisma enums exactly)
@@ -126,10 +161,43 @@ export const mediaItems = pgTable(
     aiSummary: text('ai_summary'),
     aiKeywords: text('ai_keywords').array().notNull().default(sql`'{}'::text[]`),
     aiGeneratedAt: timestamp('ai_generated_at', { withTimezone: true }),
+
+    // --- Full-text search (generated; the app never writes these) -----------
+    //
+    // Weighted so a title hit outranks a description hit and a tag hit sits
+    // between them: A = title, B = tags, C = description/author.
+    //
+    // Deliberately NOT indexed: ai_summary / ai_keywords / hashtags /
+    // original_title / original_description. Nothing writes them in v2 (uploads
+    // are direct, there is no metadata scraper), so indexing them would grow
+    // every vector and index for columns that are always NULL. Adding one later
+    // means a migration that drops and re-adds the generated column, since the
+    // vectors have to be recomputed for existing rows.
+    searchVector: tsvector('search_vector').generatedAlwaysAs(
+      sql`setweight(to_tsvector('simple', ${normalizeText(sql`coalesce(title, '')`)}), 'A') ||
+          setweight(to_tsvector('simple', ${normalizeTexts(sql`tags`)}), 'B') ||
+          setweight(to_tsvector('simple', ${normalizeText(sql`coalesce(description, '')`)}), 'C') ||
+          setweight(to_tsvector('simple', ${normalizeText(sql`coalesce(original_author, '')`)}), 'C')`,
+    ),
+
+    /**
+     * The same text flattened into one normalized string, for substring and
+     * fuzzy matching (`ILIKE '%…%'`, `word_similarity`). Full-text search alone
+     * can't find `صباح` inside `الصباح` once the article strip fails to apply to
+     * a word the indexer saw differently — trigram covers what lexeme matching
+     * misses.
+     */
+    searchText: text('search_text').generatedAlwaysAs(
+      sql`${normalizeText(
+        sql`coalesce(title, '') || ' ' || ${normalizeTexts(sql`tags`)} || ' ' || coalesce(description, '') || ' ' || coalesce(original_author, '')`,
+      )}`,
+    ),
   },
   (t) => [
     index('media_items_user_created_idx').on(t.userId, t.createdAt),
     index('media_items_caption_status_idx').on(t.captionStatus, t.createdAt),
+    index('media_items_search_vector_idx').using('gin', t.searchVector),
+    index('media_items_search_text_trgm_idx').using('gin', sql`${t.searchText} gin_trgm_ops`),
   ],
 );
 
@@ -182,8 +250,20 @@ export const captionSegments = pgTable(
     endTime: doublePrecision('end_time').notNull(),
     text: text('text').notNull(),
     confidence: doublePrecision('confidence'),
+
+    /**
+     * Transcript search — this is what lets the archive answer "which track
+     * says this?" and return the timestamp to jump to. One weight: a lyric line
+     * has no title/tag/description hierarchy.
+     */
+    searchVector: tsvector('search_vector').generatedAlwaysAs(
+      sql`to_tsvector('simple', ${normalizeText(sql`coalesce(text, '')`)})`,
+    ),
   },
-  (t) => [index('caption_segments_caption_start_idx').on(t.captionId, t.startTime)],
+  (t) => [
+    index('caption_segments_caption_start_idx').on(t.captionId, t.startTime),
+    index('caption_segments_search_vector_idx').using('gin', t.searchVector),
+  ],
 );
 
 // ---------------------------------------------------------------------------

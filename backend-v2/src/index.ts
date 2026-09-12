@@ -9,6 +9,7 @@ import { createDB } from './db/client';
 import { authRoutes } from './routes/auth';
 import { mediaRoutes } from './routes/media';
 import { captionRoutes } from './routes/captions';
+import { searchRoutes } from './routes/search';
 import { handleQueueBatch, handleScheduled } from './queue/consumer';
 import type { CaptionJobMessage } from './queue/messages';
 
@@ -62,6 +63,7 @@ app.get('/health', (c) =>
 app.route('/api/auth', authRoutes);
 app.route('/api/media', mediaRoutes);
 app.route('/api/media', captionRoutes);
+app.route('/api/search', searchRoutes);
 
 // ---------------------------------------------------------------------------
 // Errors

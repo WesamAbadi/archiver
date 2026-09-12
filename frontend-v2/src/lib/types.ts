@@ -130,3 +130,32 @@ export interface UploadStartResult {
   key: string;
   uploadUrl: string;
 }
+
+// ---------------------------------------------------------------------------
+// Search (mirrors backend-v2/src/services/search.ts)
+// ---------------------------------------------------------------------------
+
+/** Which field a result matched on. `lyrics` means the transcript. */
+export type SearchMatchField = 'title' | 'tags' | 'description' | 'lyrics';
+
+export interface SearchMatch {
+  fields: SearchMatchField[];
+  /** The best-matching transcript line, with the timestamp to seek to. */
+  lyric: { text: string; startTime: number } | null;
+}
+
+/** A search result is a full media item plus why it matched. */
+export interface SearchHit extends MediaItem {
+  match: SearchMatch;
+}
+
+export interface SearchResults extends Pagination {
+  items: SearchHit[];
+  /** Echoed back by the server after normalization/trimming. */
+  query: string;
+}
+
+export interface SearchSuggestion {
+  value: string;
+  kind: 'title' | 'tag';
+}

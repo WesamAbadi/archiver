@@ -8,12 +8,14 @@ Cloudflare Workers + Hono + Drizzle (Postgres via Hyperdrive) + R2. The rewrite 
 src/
   index.ts          Hono app entry (CORS, errors, routes, queue consumer, cron)
   env.ts            Shared bindings type
-  auth/             Google ID token verify (jose) + session JWTs + middleware
+  auth/             admin credential check + DB sessions + middleware
   db/               Drizzle client (Hyperdrive) + schema
   lib/id.ts         nanoid ids
   queue/            messages.ts (typed contract) + consumer.ts (ack/retry + cron)
-  routes/           auth.ts, media.ts, captions.ts
-  services/         r2.ts (presign), users.ts, media.ts, captions.ts, groq.ts
+  routes/           auth.ts, media.ts, captions.ts, search.ts
+  services/         r2.ts (presign), users.ts, media.ts, captions.ts, groq.ts, search.ts
+drizzle/            generated migrations (0002's search prelude is hand-written)
+scripts/            verify + dry-run tooling (see "Verifying" below)
 test/               vitest unit tests
 ```
 
@@ -142,6 +144,25 @@ key must be rejected without a signature) and that deleting an item really
 removes the R2 object, confirmed by re-requesting the same signed URL and
 expecting a 404.
 
+### Migrations and search — no password, no mutation
+
+```bash
+npx tsx scripts/dryrun-migration.ts drizzle/0002_clammy_hercules.sql   # apply, then roll back
+npx tsx scripts/verify-search.ts                                      # 30 checks, then roll back
+```
+
+Both open ONE connection, run inside ONE transaction, and roll back in a
+`finally` — there is no flag to commit. `dryrun-migration.ts` catches the class of
+failure that matters most here: Drizzle can't model extensions or functions, so
+those parts of a migration are hand-written and never covered by `db:generate`.
+It reports which statements applied and which search columns/indexes exist.
+
+`verify-search.ts` runs the **real** `searchMedia` / `suggest` code against the
+real database (a Drizzle client built on that same transaction), so it covers the
+things a type checker can't: whether `websearch_to_tsquery` survives a quote or a
+bracket, whether `%` escapes instead of matching every row, and whether generated
+columns read back as numbers. It works whether or not 0002 has been applied.
+
 ## Upload flow (presigned, nothing big transits the Worker)
 
 ```
@@ -198,7 +219,39 @@ Why sessions instead of JWTs: revocation works (logout is instant, expiry is rea
 and there is no signing secret to manage. The token never reaches the database in
 raw form, so a DB leak yields no usable sessions.
 
-## API (Phases 1–2)
+## Search (Phase 5)
+
+Normalization lives in Postgres, in `archivedrop_normalize_text()` — created by
+migration `0002` and applied to the indexed columns *and* the user's query, so
+the two cannot disagree. That was the old codebase's central search bug: it
+indexed with the `english` tsvector config and queried with `simple`, so the
+index was never used, and Arabic variants were handled by a JS heuristic that ran
+on the query only.
+
+What the function does: strips harakat/tatweel, unifies letter variants
+(`أإآٱ→ا`, `ىئ→ي`, `ة→ه`, Arabic-Indic digits), lowercases, and removes the
+definite article per word (`ال` and وال/بال/فال/كال/لل). Without that last step
+`الصباح` and `صباح` are different lexemes and an Arabic archive is unsearchable.
+The article strip is guarded by an Arabic-codepoint lookahead so English words
+beginning with `al` are untouched.
+
+Two kinds of matching, because each covers the other's blind spot:
+
+- **tsvector + GIN** over a weighted generated column — title `A`, tags `B`,
+description/author `C`. `simple` config: Postgres has no Arabic stemmer, so
+`يشتاق`/`اشتياق` (same root, different derivation) will *not* match each other.
+- **pg_trgm + ILIKE/`word_similarity`** over a flattened normalized column — for
+substrings, typos and partial words, and for `صباح` inside `الصباح`.
+
+Transcripts are searched too: `caption_segments.search_vector` is its own
+generated column, and a hit returns the best matching line with its timestamp,
+which the UI turns into a `?t=` deep link into the player.
+
+> Changing `archivedrop_normalize_text` does **not** recompute existing vectors.
+> Normalization changes need a migration that drops and re-adds the generated
+> columns so every row is re-indexed.
+
+## API (Phases 1–2, 5)
 
 | Method | Path | Notes |
 |---|---|---|
@@ -206,7 +259,7 @@ raw form, so a DB leak yields no usable sessions.
 | POST | `/api/auth/login` | username + password → session token |
 | POST | `/api/auth/logout` | revoke the presented session token |
 | GET | `/api/auth/me` | validate a stored token (used on app boot) |
-| GET | `/api/media` | list own items (page/limit/visibility) |
+| GET | `/api/media` | list own items (page/limit) |
 | GET | `/api/media/quota` | storage used/limit |
 | GET | `/api/media/:id` | owned item |
 | PATCH | `/api/media/:id` | title/description/visibility/tags |
@@ -218,3 +271,5 @@ raw form, so a DB leak yields no usable sessions.
 | POST | `/api/media/:id/captions/generate` | (re)generate captions |
 | PUT | `/api/media/:id/captions/:captionId` | bulk-replace segments (editor) |
 | DELETE | `/api/media/:id/captions/:captionId` | delete captions |
+| GET | `/api/search` | `?q=&page=&limit=` — titles, tags, descriptions, transcripts |
+| GET | `/api/search/suggestions` | `?q=&limit=` — typeahead titles + tags |

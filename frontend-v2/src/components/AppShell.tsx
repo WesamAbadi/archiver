@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { HardDrive, Library, LogOut, Settings } from 'lucide-react';
+import { HardDrive, Library, LogOut, Search, Settings } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { formatBytes } from '@/lib/format';
 import { useLogout } from '@/features/auth/hooks';
@@ -7,6 +7,7 @@ import { useQuota } from '@/features/media/api';
 
 const NAV_ITEMS = [
   { to: '/library', label: 'Library', icon: Library },
+  { to: '/search', label: 'Search', icon: Search },
   { to: '/settings', label: 'Settings', icon: Settings },
 ] as const;
 

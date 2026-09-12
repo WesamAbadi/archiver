@@ -1,10 +1,12 @@
 # ArchiveDrop — Cloudflare Migration Plan
 
 > Status tracker for the full rewrite of ArchiveDrop onto Cloudflare (Workers + Pages + R2) with Groq Whisper transcription.
-> Last updated: 2026-09-12 — **Phases 1–2 complete and deployed** (Worker `archivedrop-api` + Pages `archivedrop` live in account `cd44a079…`; Hyperdrive, both queues and all five Worker secrets are set). Auth is single-admin login — **no OAuth, no accounts**.
-> **Where it stands:** Phases 1–2 (backend) and **Phase 4 (frontend) are complete, deployed and verified end-to-end against real storage.** The frontend was rebuilt fresh in `frontend-v2/` rather than patched, and is live on Cloudflare Pages. Remaining work is Phase 5 (search) and Phase 6 (hardening).
+> Last updated: 2026-09-12 — **Phases 1, 2, 4 and 5 complete and deployed** (Worker `archivedrop-api` + Pages `archivedrop` live in account `cd44a079…`; Hyperdrive, both queues and all five Worker secrets are set). Auth is single-admin login — **no OAuth, no accounts**.
+> **Where it stands:** Phases 1–2 (backend), **Phase 4 (frontend)** and **Phase 5 (search)** are complete, deployed and verified end-to-end against real storage *and real Arabic audio*. The frontend was rebuilt fresh in `frontend-v2/` rather than patched, and is live on Cloudflare Pages. Remaining work is Phase 6 (hardening, cutover, data migration).
 >
 > **Verified end-to-end in a real browser**, not just with curl: admin login → library → UI upload (image *and* audio) with progress → auto-enqueued transcription → Groq Whisper returned real timestamps → transcript rendered → caption editor edit + undo + save persisted → playback from a signed R2 URL (3s file, duration decoded, no error). Test data cleaned up; library and DB back to empty.
+>
+> **Then validated against real Arabic audio.** A real 7.1 MB Arabic track was uploaded (not by me): Whisper detected `Arabic`, produced **32 real timestamped segments** over 4:12, and the job completed on the **first attempt** with 0 retries — so the synthetic-tone caveat is closed for a file of this size. Search was rebuilt and verified on that same real corpus: `القدس` and `قدس` both return the *title* and the lyric at **47.02s**, `جبريلا` returns its line at **01:03**, and the library→search→player path runs end to end (the `?t=` deep link seeks the `<audio>` element to exactly 47.02).
 >
 > **Three production defects surfaced during that verification** — all invisible to curl-based testing: missing **bucket CORS** (would have blocked every browser upload), **`PUT` missing from the API's CORS allowMethods** (the caption editor could not save at all), and **Hyperdrive query caching** serving stale reads. See §3.2.
 
@@ -186,7 +188,7 @@ backend-v2/
 
 ### Phase 3 — Realtime progress
 - [x] v1: job-status polling endpoint (`GET /media/:id/caption-status`) — built in Phase 2, auth-checked
-- [ ] Frontend polls during upload/transcription
+- [x] Frontend polls during upload/transcription — `useCaptionStatus`, 4s interval, stops on a terminal state (verified in the browser: a real upload went `QUEUED` → `COMPLETED` with no reload)
 - [ ] (Optional v2) Durable Object WebSocket for push updates
 
 ### Phase 4 — Frontend rebuild in `frontend-v2/` — **built and deployed**
@@ -209,10 +211,24 @@ Decision (supersedes "clean up `frontend/`"): **rebuild fresh** against the v2 A
 
 **SPA fallback gotcha (cost a failed deploy):** Cloudflare now **rejects** the classic `_redirects` rule `/* /index.html 200` with `Infinite loop detected` (code 100324) — because Pages strips `.html`, `/index.html` → `/index` matches `/*` again. The deploy fails outright. Replaced with a `200.html` catch-all emitted at build time by a small Vite plugin (`spaFallback` in `vite.config.ts`).
 
-### Phase 5 — Search
-- [ ] Simplified weighted tsvector + pg_trgm query (single sane query, no recursive CTE)
-- [ ] Fix tsvector config mismatch; wire Arabic normalization into indexing + query
-- [ ] Search + suggestions endpoints with Zod validation
+### Phase 5 — Search — **complete, deployed and verified on real Arabic audio**
+
+- [x] **Normalization moved into Postgres** — `archivedrop_normalize_text()` (migration `0002`), applied to the indexed columns *and* the query, so index and search terms cannot disagree. This is the fix for the old mismatch (indexed `english`, queried `simple`, so the GIN index was never used) and it replaces the 100-line JS variant heuristic that ran on the query only. Handles harakat/tatweel, letter variants (`أإآٱ→ا`, `ىئ→ي`, `ة→ه`, `ؤ→و`, `ک→ہ`, Arabic-Indic digits), Latin lowercasing, and the definite article per word.
+- [x] **Weighted tsvector, generated + STORED** — title `A`, tags `B`, description/author `C`; GIN index on each. Generated columns, not app-maintained values, so a vector can never drift from its row.
+- [x] **pg_trgm alongside full text** — a flattened normalized `search_text` column with a `gin_trgm_ops` index drives substring and fuzzy matching, which is what rescues the cases the `simple` config can't: `صباح` inside `الصباح`, and typos.
+- [x] **Transcripts are searchable** — `caption_segments.search_vector` is its own generated column; a hit returns the best-matching line **and its timestamp**, which the UI turns into a `?t=` deep link that seeks the player.
+- [x] **One query, no recursion** — replaces the old 420-line `WITH RECURSIVE` CTE with a single ranked query (a small CTE aggregates the best segment per item; no N+1, no per-row `similarity()` over every segment). Ranking: full-text rank 3.0, title `word_similarity` 2.5, substring-in-title 2.0, transcript 1.5, anywhere-in-text 1.0.
+- [x] Search + suggestions endpoints (`GET /api/search`, `GET /api/search/suggestions`) with Zod validation, auth, and ownership scoping inside the service
+- [x] Frontend search page: query held in the URL (linkable, refresh-safe, back-button-safe), debounced input, keyboard-navigable suggestion list, match chips (`title`/`tags`/`description`/`lyrics`), lyric snippets rendered with `dir="rtl"` and the matched term highlighted
+- [x] Library search box now hands off to `/search` instead of filtering the 24 rows on screen and calling it search
+
+**Notes worth keeping:**
+
+- `websearch_to_tsquery`, not `to_tsquery` — it accepts quoted phrases and `-term` and, the real reason, **never raises a syntax error on raw user input**. The old code interpolated into `to_tsquery`, so a stray quote was a 500.
+- Every value goes through `escapeLike`: without it a query of `%` matches *every row* and `_` matches any character. Guarded in TS (`hasNoSearchTerm`) **and** in SQL (`p.norm <> ''`) so an empty query can't reach `ILIKE '%%'`.
+- Substring matching is skipped below 3 characters, otherwise `or` matches "recording" across the library.
+- Still no Arabic **stemmer**: `يشتاق` and `اشتياق` share a root and do not match each other. Word-level morphology is the next step if it proves to matter, and it needs real data to justify rather than a guess.
+- Two Postgres facts worth not re-learning: **`array_to_string` is STABLE, not IMMUTABLE** (so it can't appear in a generated column — hence the declared-immutable `archivedrop_normalize_texts` wrapper), and **`\p{Arabic}` is not supported in Postgres regexes** (use a codepoint range).
 
 ### Phase 6 — Production hardening
 - [x] Security: every route auth + ownership checked, no debug route, CORS from an explicit allowlist
@@ -222,6 +238,7 @@ Decision (supersedes "clean up `frontend/`"): **rebuild fresh** against the v2 A
 - [ ] R2 custom domain + caching for delivery
 - [x] Deploy: Worker + R2 + Queues + cron — live; Pages: single `archivedrop` project (the interim `archivedrop-app` / `archivedrop-v2` projects were deleted once the rebuild was verified)
 - [x] E2E storage path verified: `backend-v2/scripts/smoke-storage.sh` (login → presign → PUT → confirm → quota → delete) and `scripts/verify-playback.sh` (signed playback URL serves the real bytes; unsigned key refused; delete removes the R2 object, proven by re-requesting the same signed URL)
+- [x] Migrations are testable without touching the database: `scripts/dryrun-migration.ts <file>` applies a migration in a transaction and always rolls back, so the hand-written parts Drizzle can't generate (extensions, functions) are provable before they run for real. `scripts/verify-search.ts` runs the real search service inside the same kind of rolled-back transaction — 30 checks over SQL semantics, Arabic normalization and adversarial input, no writes.
 - [x] Hyperdrive query caching **disabled** — it was on by default and broke read-after-write
 - [ ] Data migration: move existing B2 files → R2 (if old data should be kept)
 
@@ -230,9 +247,10 @@ Decision (supersedes "clean up `frontend/`"): **rebuild fresh** against the v2 A
 ## 6. Open questions
 
 - [x] Postgres provider: **Neon**, via Hyperdrive `archivedrop-db` (`db89e4c4…`). Direct endpoint only — Hyperdrive pools globally, so Neon's PgBouncer would stack two poolers.
-- [ ] Keep old B2 data? If yes, plan a one-off migration script (B2 → R2 with same key layout)
-- [ ] Groq model choice: default `whisper-large-v3-turbo` (fast/cheap, 12% WER); switchable via `GROQ_MODEL` secret (`whisper-large-v3` = 10.3% WER + translation). Benchmark on real audio before deciding finally.
-- [ ] Groq account tier: free tier caps files at 25MB (url mode); dev tier 100MB — decide tier based on real library sizes; chunking only if needed
+- [x] **Old B2 data: start fresh.** Decided — no migration script. The R2 bucket stays empty and the old library is abandoned.
+- [x] **Groq model: `whisper-large-v3-turbo` on real audio.** A real 7.1 MB Arabic track transcribed on the first attempt into 32 timestamped segments with `language: Arabic` detected. `GROQ_MODEL` remains the escape hatch to `whisper-large-v3` (more accurate, also translates) if accuracy disappoints on other material.
+- [ ] **Groq account tier: partly settled.** 7.1 MB works (free tier caps *fetched* files at 25 MB in url mode). Still untested: a file near or above 25 MB, and what Groq actually returns when one is sent — that error should be classified per manent and surfaced in `captionErrorMessage`, not retried to the DLQ. Chunking only if a real file needs it.
+- [ ] Shared types package (frontend + backend) — the client types in `frontend-v2/src/lib/types.ts` are still hand-written copies of the serializers. Low risk (a mismatch shows up as a type error at the call site) but it is a copy.
 - [ ] Video transcription: extract audio track (where? client-side pre-upload vs separate service) or keep audio-only for v1
 - [ ] Domain strategy: custom domain for R2 delivery + Worker API (e.g. `cdn.` / `api.` subdomains)
 - [x] Old repo fate: build `backend-v2/`+`frontend-v2/` alongside, then **delete-and-replace in place** at Phase 6 (renaming `-v2` dirs to `backend/`/`frontend/`). Repo name `archiver` intentionally unchanged (decision #6).
