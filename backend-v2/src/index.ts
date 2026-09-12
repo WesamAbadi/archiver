@@ -8,6 +8,9 @@ import type { AppEnv, Env } from './env';
 import { createDB } from './db/client';
 import { authRoutes } from './routes/auth';
 import { mediaRoutes } from './routes/media';
+import { captionRoutes } from './routes/captions';
+import { handleQueueBatch, handleScheduled } from './queue/consumer';
+import type { CaptionJobMessage } from './queue/messages';
 
 const app = new Hono<AppEnv>();
 
@@ -51,6 +54,7 @@ app.get('/health', (c) =>
 
 app.route('/api/auth', authRoutes);
 app.route('/api/media', mediaRoutes);
+app.route('/api/media', captionRoutes);
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -65,9 +69,11 @@ app.onError((err, c) => {
 app.notFound((c) => c.json({ success: false, error: 'Not Found' }, 404));
 
 // ---------------------------------------------------------------------------
-// Workers entry
+// Workers entry — HTTP + Queues consumer + cron
 // ---------------------------------------------------------------------------
 
 export default {
   fetch: app.fetch,
-} satisfies ExportedHandler<Env>;
+  queue: handleQueueBatch,
+  scheduled: handleScheduled,
+} satisfies ExportedHandler<Env, CaptionJobMessage>;

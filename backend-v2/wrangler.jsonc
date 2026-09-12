@@ -28,10 +28,40 @@
     }
   ],
 
-  // Non-secret env vars. Secrets (JWT_SECRET, R2 tokens, GOOGLE_CLIENT_ID) go via:
-  //   npx wrangler secret put <NAME>
+  // Caption transcription queue (producer binding; this Worker is also the consumer)
+  // Create with (wrangler v4 has no --dead-letter-queue flag; the DLQ is wired here):
+  //   npx wrangler queues create caption-jobs-dlq
+  //   npx wrangler queues create caption-jobs
+  "queues": {
+    "producers": [
+      {
+        "binding": "CAPTION_QUEUE",
+        "queue": "caption-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "caption-jobs",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "dead_letter_queue": "caption-jobs-dlq"
+      }
+    ]
+  },
+
+  // Cron: reclaim stuck jobs + re-send QUEUED jobs every 5 minutes
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
+  // Non-secret env vars (committed). Secrets go via `npx wrangler secret put <NAME>`:
+  //   GOOGLE_CLIENT_ID, JWT_SECRET, GROQ_API_KEY, R2_ACCOUNT_ID,
+  //   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   (full reference: .env.example)
   "vars": {
     "R2_BUCKET_NAME": "archivedrop-media",
+    // Comma-separated allowlist. For production add your Pages domain, e.g.:
+    //   "CORS_ORIGINS": "http://localhost:5173, https://archivedrop.pages.dev"
     "CORS_ORIGINS": "http://localhost:5173"
   },
 

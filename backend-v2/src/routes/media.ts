@@ -15,6 +15,7 @@ import type { AppEnv } from '../env';
 import { requireAuth } from '../auth';
 import { createDB } from '../db/client';
 import * as mediaService from '../services/media';
+import * as captionService from '../services/captions';
 import { getStorageQuota, getUserByUid } from '../services/users';
 import { isAllowedMimeType } from '../services/r2';
 
@@ -195,7 +196,25 @@ mediaRoutes.post('/upload/confirm', async (c) => {
     }
   }
 
-  return c.json({ success: true, data: result.item });
+  // Auto-enqueue transcription for audio (video later). Never fails the upload:
+  // job row is QUEUED and the cron sweep re-sends if the queue send throws.
+  let captionJobId: string | null = null;
+  try {
+    const enqueued = await captionService.createCaptionJob(db, result.item.id, dbUser.id);
+    if (typeof enqueued === 'string') {
+      captionJobId = enqueued;
+      await c.env.CAPTION_QUEUE?.send({
+        version: 1,
+        jobId: enqueued,
+        mediaItemId: result.item.id,
+        userUid: dbUser.uid,
+      });
+    }
+  } catch (err) {
+    console.error('[upload/confirm] caption enqueue failed (cron will retry):', err);
+  }
+
+  return c.json({ success: true, data: { ...result.item, captionJobId } });
 });
 
 // Route-order note: static paths (/upload/start, /quota) are registered above

@@ -1,7 +1,7 @@
 # ArchiveDrop — Cloudflare Migration Plan
 
 > Status tracker for the full rewrite of ArchiveDrop onto Cloudflare (Workers + Pages + R2) with Groq Whisper transcription.
-> Last updated: 2026-09-12 — **Phase 1 code complete** (infra binding/setup pending, see `backend-v2/README.md`)
+> Last updated: 2026-09-12 — **Phases 1–2 code complete** (infra bindings pending: Hyperdrive id, queues, secrets — see `backend-v2/README.md`)
 
 ---
 
@@ -153,13 +153,18 @@ backend-v2/
   drizzle/            generated SQL migrations
 ```
 
-### Phase 2 — Groq Whisper transcription
-- [ ] Cloudflare Queues setup + consumer binding
-- [ ] Groq service: stream R2 → Groq API → parse `verbose_json`
-- [ ] Write `captions` + `caption_segments` rows; status machine updates
-- [ ] Retries + failure states + stuck-job reclaim (cron)
-- [ ] 25MB limit handling (size cap in v1; document chunking path for later)
-- [ ] Caption editor API: get / create / update segments / delete (auth-checked)
+### Phase 2 — Groq Whisper transcription — **code complete, infra binding pending**
+- [x] Cloudflare Queues consumer + producer binding (`src/queue/`), per-message ack/retry, DLQ configured in wrangler.jsonc
+- [x] Groq service (`src/services/groq.ts`): **url mode** — Groq fetches audio from a 10-min presigned R2 GET URL, so the 25MB request limit doesn't apply and no bytes transit the Worker; `verbose_json` + segment granularity → real timestamps
+- [x] Caption service (`src/services/captions.ts`): DB-backed state machine (QUEUED→PROCESSING→COMPLETED/FAILED), atomic claim (double-delivery safe), attempt counting in Postgres (survives deploys)
+- [x] Retries: transient Groq errors (408/429/5xx/network) → `msg.retry({delaySeconds})` with quadratic backoff 1/4/9 min (cap 1h); permanent (400/401/403/404/413) → fail fast; max_retries→DLQ
+- [x] Cron (*/5 min): reclaim stuck PROCESSING (>15 min) + re-send QUEUED jobs (covers dropped messages, self-healing)
+- [x] Caption routes: list w/ segments, caption-status polling, generate (re-enqueue), bulk segment save, delete — all auth + ownership checked (fixes old unauthenticated transcripts)
+- [x] Auto-enqueue wired into upload/confirm (audio only in v1; video needs an audio-extraction step — noted below)
+- [x] Unit tests for parsing/normalization/backoff/error-classification (27 passing total); strict tsc clean
+- [ ] Infra: create the two queues (`caption-jobs`, `caption-jobs-dlq`) + `GROQ_API_KEY` secret (README §Cloudflare setup)
+- [ ] Note: 25MB Groq url-mode limit still applies to the *fetched file* per request — large files above dev-tier limits need chunking later (open question)
+- [ ] Video files: Whisper takes audio-only via url; add audio extraction (or accept audio-only) before enabling video
 
 ### Phase 3 — Realtime progress
 - [ ] v1: job-status polling endpoint (`GET /media/:id/caption-status`)
@@ -195,8 +200,9 @@ backend-v2/
 
 - [ ] Postgres provider: Neon vs Supabase vs RDS Proxy/Hyperdrive pricing + fit (decide at Phase 1 start)
 - [ ] Keep old B2 data? If yes, plan a one-off migration script (B2 → R2 with same key layout)
-- [ ] Groq model choice: `whisper-large-v3-turbo` (fast/cheap) vs `whisper-large-v3` (accuracy) — benchmark on real audio
-- [ ] File size cap for v1 (25MB Groq limit): hard cap at upload, or allow larger files and chunk later?
+- [ ] Groq model choice: default `whisper-large-v3-turbo` (fast/cheap, 12% WER); switchable via `GROQ_MODEL` secret (`whisper-large-v3` = 10.3% WER + translation). Benchmark on real audio before deciding finally.
+- [ ] Groq account tier: free tier caps files at 25MB (url mode); dev tier 100MB — decide tier based on real library sizes; chunking only if needed
+- [ ] Video transcription: extract audio track (where? client-side pre-upload vs separate service) or keep audio-only for v1
 - [ ] Domain strategy: custom domain for R2 delivery + Worker API (e.g. `cdn.` / `api.` subdomains)
 - [ ] Old repo fate: freeze `backend/`+`frontend/` in place and build `backend-v2/` alongside, or delete-and-replace in place?
 
