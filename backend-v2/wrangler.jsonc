@@ -18,13 +18,16 @@
     }
   ],
 
-  // Postgres via Hyperdrive — run `npx wrangler hyperdrive create archivedrop-db \
-  //   --connection-string="postgres://user:pass@host/db"` and paste the ID here.
+  // Postgres via Hyperdrive. Connection string must use Neon's DIRECT endpoint
+  // (no `-pooler`) — Hyperdrive pools globally, so a second pooler is redundant
+  // and unsupported in practice. Recreate/update with:
+  //   npx wrangler hyperdrive create archivedrop-db --connection-string="postgres://..."
+  //   npx wrangler hyperdrive update archivedrop-db --connection-string="postgres://..."
   // Local dev without a Hyperdrive binding falls back to DATABASE_URL (see src/db/client.ts).
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "REPLACE_WITH_HYPERDRIVE_ID"
+      "id": "2b60af1efcb8489e8ffc69605b40bf58"
     }
   ],
 

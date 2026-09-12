@@ -27,6 +27,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260911.1",
     "@types/pg": "^8.11.10",
+    "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.1",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3",
