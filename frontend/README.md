@@ -138,6 +138,33 @@ Two things to know before editing this file:
   JavaScript it loaded, and no header can change that — reload it. If that ever
   needs to be automatic, the fix is a build-id the app polls, not caching.
 
+### Git-connected builds
+
+The project is connected to the repo, so a push to `main` builds and deploys on
+its own. The three settings it needs (Settings → Builds & deployments):
+
+| Setting | Value |
+|---|---|
+| Root directory | `frontend` |
+| Build command | `pnpm build` (runs `tsc --noEmit && vite build`) |
+| Build output directory | `dist` |
+
+The root directory **must not** be left blank. Pages defaults to the repo root,
+which has no `package.json` and fails with `ERR_PNPM_NO_PKG_MANIFEST`.
+
+The build image's pnpm is older than the local one (10.x vs 11.x) and the docs
+say pages only reads `PNPM_VERSION` for pnpm — there is no version file, and v3
+explicitly ignores `engines` and the lockfile version. So the repo is kept
+working on both rather than pinned, which means the build must not depend on
+anything pnpm 11-only. Two consequences worth knowing:
+
+- `pnpm-workspace.yaml` **must keep its `packages` key** — see trap 4.
+- The build-script approvals in that file are pnpm 11 syntax and are ignored by
+  pnpm 10, which prints `Ignored build scripts: esbuild, workerd` and carries on.
+  That is fine: verified that with the scripts skipped, a clean
+  `pnpm install --frozen-lockfile && pnpm build` produces a byte-identical
+  bundle. They matter for local `wrangler dev`, not for the Pages build.
+
 ### Traps that will bite you
 
 **1. Do not add a `_redirects` SPA rule.** The classic
@@ -147,10 +174,19 @@ Two things to know before editing this file:
 SPA fallback comes from `200.html`, which `vite.config.ts` emits at build time
 by copying `index.html`. Deep links (`/watch/abc`, `/settings`) then return 200.
 
-**2. `--force` is for project *creation* only.** This project exists, so deploys
+**2. `pnpm-workspace.yaml` must keep its `packages` key.** pnpm writes this file
+itself when it blocks a dependency's install script, and what it writes has **no
+`packages` key** — after which any pnpm that validates the manifest dies with
+`ERROR packages field missing or empty`. That is precisely what broke the first
+Git-connected build: the file was created locally by pnpm 11 (which doesn't
+validate it) and read by the build image's pnpm 10 (which does). If you accept
+pnpm's build-script prompt, put `packages: ['.']` back before committing. Same
+file, same fix, in `backend/`.
+
+**3. `--force` is for project *creation* only.** This project exists, so deploys
 run directly against Pages. Don't pass `--force` to `pages deploy`.
 
-**3. Create the project via the API, not `wrangler pages project create`.**
+**4. Create the project via the API, not `wrangler pages project create`.**
 Wrangler's newer create flow can register an **empty Worker with the same name**
 before falling back to classic Pages. If it then errors, that Worker is left
 behind. It has no versions and no routes, so it serves no traffic — but it shows
