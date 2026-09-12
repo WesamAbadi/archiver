@@ -81,6 +81,31 @@ pnpm build
 npx wrangler pages deploy dist --project-name archivedrop
 ```
 
+### Caching (`public/_headers`)
+
+Vite copies `public/` into `dist/` verbatim, so `public/_headers` ships with every
+deploy and picks the cache policy for both kinds of thing served:
+
+| Path | `Cache-Control` | Why |
+|---|---|---|
+| everything (the shell) | `no-cache, max-age=0, must-revalidate` | The shell names the hashed bundles, so a stale copy means running an older app, possibly against a newer API. It carries **no `ETag` or `Last-Modified`**, so a browser has nothing to revalidate with and must fetch it fresh on every navigation — a deploy can't be invisible to someone who navigates during it. |
+| `/assets/*` | `public, max-age=31536000, immutable` | Vite puts a content hash in every filename, so the bytes at a name never change and a new build always emits a new name. Nothing to go stale. |
+
+Measured, not assumed: on a repeat load the assets used to revalidate (300 bytes
+per asset, every load); they now transfer **0 bytes**.
+
+Two things to know before editing this file:
+
+- **Rules merge.** A header set by two matching rules is joined with a comma, so a
+  catch-all `Cache-Control` plus a specific one yields
+  `public, max-age=0, must-revalidate, public, max-age=31536000, immutable`. That is
+  why the asset rule detaches (`! Cache-Control`) the catch-all value before
+  setting its own instead of layering under it. Verified after deploying: the
+  asset returns exactly `public, max-age=31536000, immutable`.
+- **A stale tab is not a caching problem.** An already-open tab keeps running the
+  JavaScript it loaded, and no header can change that — reload it. If that ever
+  needs to be automatic, the fix is a build-id the app polls, not caching.
+
 ### Traps that will bite you
 
 **1. Do not add a `_redirects` SPA rule.** The classic
