@@ -68,6 +68,13 @@ Single admin, no accounts. One username and password (`ADMIN_USERNAME` /
 password isn't configured. Sessions are opaque tokens stored server-side as
 SHA-256 hashes, so they are revocable and expire.
 
+Login is throttled in two layers, because the endpoint is the only
+unauthenticated surface: a Cloudflare rate limit at the edge (per IP, per
+location), and a global failure counter on the admin row that locks the account
+for 15 minutes after 8 failures and clears on any successful login. The edge
+limit alone wouldn't be enough — its counters are per location, so it can be
+walked around by changing IP.
+
 ## Docs
 
 - [`MIGRATION_PLAN.md`](./MIGRATION_PLAN.md) — the migration itself: decisions,

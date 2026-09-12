@@ -53,6 +53,27 @@ export async function ensureAdminUser(db: DB, username: string): Promise<User> {
   return inserted[0];
 }
 
+/**
+ * Persist login-throttle state (see src/auth/throttle.ts for the policy).
+ *
+ * Structural type on purpose — the deciding logic lives in `auth/throttle.ts`,
+ * which stays free of database imports so it can be unit-tested alone.
+ */
+export async function saveLoginThrottle(
+  db: DB,
+  userId: string,
+  state: { failedAttempts: number; lockedUntil: Date | null },
+): Promise<void> {
+  await db
+    .update(users)
+    .set({
+      failedLoginAttempts: state.failedAttempts,
+      lockedUntil: state.lockedUntil,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId));
+}
+
 export interface QuotaInfo {
   used: number;
   limit: number;

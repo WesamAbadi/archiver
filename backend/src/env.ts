@@ -12,6 +12,12 @@ export interface Env extends DBEnv, R2Env, AuthEnv, GroqEnv {
   CORS_ORIGINS?: string;
   /** Cloudflare Queues producer binding for caption jobs. */
   CAPTION_QUEUE?: Queue<CaptionJobMessage>;
+  /**
+   * Edge rate limit for the login endpoint. Optional so local dev and any
+   * account without the binding still work — the database-backed lock in
+   * `auth/throttle.ts` is the layer that must always be present.
+   */
+  LOGIN_RATE_LIMITER?: RateLimit;
 }
 
 /** Hono app type shared by the root app and all route sub-apps,

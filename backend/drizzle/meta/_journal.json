@@ -22,6 +22,13 @@
       "when": 1789243606193,
       "tag": "0002_clammy_hercules",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789246953714,
+      "tag": "0003_striped_turbo",
+      "breakpoints": true
     }
   ]
 }

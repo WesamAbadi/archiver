@@ -8,7 +8,7 @@ Cloudflare Workers + Hono + Drizzle (Postgres via Hyperdrive) + R2. The rewrite 
 src/
   index.ts          Hono app entry (CORS, errors, routes, queue consumer, cron)
   env.ts            Shared bindings type
-  auth/             admin credential check + DB sessions + middleware
+  auth/             admin credential check + DB sessions + middleware + login throttle
   db/               Drizzle client (Hyperdrive) + schema
   lib/id.ts         nanoid ids
   queue/            messages.ts (typed contract) + consumer.ts (ack/retry + cron)
@@ -16,7 +16,7 @@ src/
   services/         r2.ts (presign), users.ts, media.ts, captions.ts, groq.ts, search.ts
 drizzle/            generated migrations (0002's search prelude is hand-written)
 scripts/            verify + dry-run tooling (see "Verifying" below)
-test/               vitest unit tests
+test/               vitest: units (r2, captions, search, throttle) + security.test.ts
 ```
 
 ## Setup
@@ -55,6 +55,43 @@ pnpm dev                    # wrangler dev on http://localhost:8787
 | `DATABASE_URL` | — (Hyperdrive binding) | `.env` | direct Postgres URL for drizzle-kit; optional `wrangler dev` fallback |
 
 Rule of thumb: **one value, one place.** Vars that aren't secrets are committed in `wrangler.jsonc`; secrets never touch git (`.dev.vars` and `.env` are gitignored).
+
+## Login protection
+
+The login endpoint is the only unauthenticated surface, so it has two layers:
+
+1. **Edge rate limit** — the `LOGIN_RATE_LIMITER` binding in `wrangler.jsonc`
+   (`simple: { limit, period }`, keyed on client IP). Counters are **per
+   Cloudflare location** and eventually consistent, so this sheds a flood but
+   does not bound guessing on its own. Tune `limit`/`period` there; `period`
+   may only be `10` or `60`, and `namespace_id` must be an integer unique in
+   the account (bindings sharing one share their counters).
+2. **Global lock** — `src/auth/throttle.ts` keeps a failure count and
+   `locked_until` on the single admin row. Because there is one row, this
+   counter is global: it can't be walked around by changing IP, which is what
+   actually limits guessing. The 8th failure locks the account for 15 minutes,
+   and any successful login clears it. Both constants are at the top of that
+   file.
+
+Verified against production, not just in tests: 10 login requests in a minute
+return `429` with `Retry-After: 60`, and a locked account returns `429` with
+`Retry-After` counting down — including for the correct password.
+
+Worth knowing: a global lock is also a denial-of-service lever, since anyone can
+lock the owner out by failing repeatedly. The lock is short and self-clearing,
+and the worst outcome is that the owner waits. That is a deliberate trade for
+bounding password guesses on a single known username.
+
+## Tests
+
+`pnpm test` runs ~115 tests. `test/security.test.ts` is the abuse suite: it
+drives the real routers and the real `requireAuth` with a *faked* database whose
+only job is to throw if anything queries it before authentication. That is what
+makes "every protected route returns 401 without touching the database" a
+checked property rather than a claim. It also covers login payload validation,
+the throttle (lock, count, clear), and the CORS allowlist — including a guard
+that `PUT` stays advertised, since its absence broke the caption editor in
+browsers while every curl-based test passed.
 
 ## Cloudflare setup (production)
 

@@ -58,6 +58,23 @@
     "crons": ["*/5 * * * *"]
   },
 
+  // Edge rate limit for POST /api/auth/login (Cloudflare Rate Limiting binding).
+  // Counters are per Cloudflare location and eventually consistent, so this
+  // sheds floods but does NOT bound guessing on its own — the global lock in
+  // src/auth/throttle.ts does that. `namespace_id` must be a positive integer
+  // unique within the account (two bindings sharing one share their counters),
+  // and `period` may only be 10 or 60 seconds.
+  "ratelimits": [
+    {
+      "name": "LOGIN_RATE_LIMITER",
+      "namespace_id": "7103",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ],
+
   // Non-secret env vars (committed). Secrets go via `npx wrangler secret put <NAME>`:
   //   ADMIN_PASSWORD, GROQ_API_KEY, R2_ACCOUNT_ID,
   //   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   (full reference: .env.example)

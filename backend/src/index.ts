@@ -81,6 +81,11 @@ app.notFound((c) => c.json({ success: false, error: 'Not Found' }, 404));
 // Workers entry — HTTP + Queues consumer + cron
 // ---------------------------------------------------------------------------
 
+// Exported so tests can drive the real middleware stack (CORS allowlist up
+// front, then routes) with `app.request(path, init, env)` instead of rebuilding
+// a parallel app that could drift from this one.
+export { app };
+
 export default {
   fetch: app.fetch,
   queue: handleQueueBatch,

@@ -118,6 +118,14 @@ export const users = pgTable('users', {
 
   // Preference kept for the UI's default sort
   sortOrder: sortOrderEnum('sort_order').notNull().default('NEWEST'),
+
+  // Login throttle (policy in src/auth/throttle.ts).
+  //
+  // Two columns instead of a table because there is exactly ONE admin row, and
+  // a global counter is the point: per-IP counters can be walked around by
+  // changing IP, this one can't. Cleared by any successful login.
+  failedLoginAttempts: integer('failed_login_attempts').notNull().default(0),
+  lockedUntil: timestamp('locked_until', { withTimezone: true }),
 });
 
 // ---------------------------------------------------------------------------
