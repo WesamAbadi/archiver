@@ -86,14 +86,16 @@ bounding password guesses on a single known username.
 
 ## Tests
 
-`pnpm test` runs ~167 tests across 8 files. `test/security.test.ts` is the abuse
+`pnpm test` runs ~174 tests across 8 files. `test/security.test.ts` is the abuse
 suite: it drives the real routers and the real `requireAuth` with a *faked*
 database whose only job is to throw if anything queries it before
-authentication. That is what makes "every protected route returns 401 without
-touching the database" a checked property rather than a claim. It also covers
-login payload validation, the throttle (lock, count, clear), and the CORS
-allowlist — including a guard that `PUT` stays advertised, since its absence
-broke the caption editor in browsers while every curl-based test passed.
+authentication. That is what makes "every route that changes the archive returns
+401 without touching the database" a checked property rather than a claim — and
+the mirror sweep checks that every read route is reachable with no session. It
+also covers login payload validation, the throttle (lock, count, clear), the
+public/admin payload narrowing, and the CORS allowlist — including a guard that
+`PUT` stays advertised, since its absence broke the caption editor in browsers
+while every curl-based test passed.
 
 `test/transcription.test.ts` drives both providers with `fetch` stubbed and
 asserts the outbound request itself — model, URL, auth, and how the bytes reach
@@ -288,9 +290,39 @@ provider-neutral contract and error classification), `groq.ts`, `google.ts`, and
 `index.ts` (the dispatcher). The queue consumer and the caption service never
 learn which provider ran.
 
+## Audience: public reads, admin writes
+
+The archive is **public to read and admin-only to change**. That is enforced by
+which middleware a route declares, not by a blanket guard:
+
+| | Middleware | Who |
+|---|---|---|
+| List, one item, playback URL, captions, caption status, search, suggestions | `optionalAuth` | Anyone. A valid session additionally fills in admin-only detail. |
+| Quota, upload, patch, delete, generate/edit/delete captions, settings | `requireAuth` | The owner only. |
+
+Two properties are worth keeping as they are:
+
+- **There is no `use('*', requireAuth)`.** Adding a route means declaring an
+  audience; inheriting the file's default is how a private route silently became
+  public (or vice versa) in the old app. `test/security.test.ts` holds both
+  lists: a write route that loses its guard returns a 500 from the exploding
+  database instead of a 401, and a read route that picks one up fails the public
+  sweep.
+- **The audience changes the payload, not the query.** A visitor's item has
+  `captionErrorMessage` and the caption job's attempts withheld — provider error
+  text and retry bookkeeping are about the pipeline, not the content. The admin
+  sees them. `toPublicMediaItem()` is the single place that narrowing happens.
+
+The owner scope is a *parameter* rather than a session: admin reads stay
+`WHERE user_id = ?`; a visitor's read has no owner predicate at all. There is one
+owner today, so it is the same rows either way — but the constraint is real
+where it is given rather than assumed everywhere.
+
 ## Auth model (single admin)
 
-There are **no accounts, no sign-up and no OAuth**. One admin logs in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`:
+There are **no accounts, no sign-up and no OAuth** — and none are needed to
+browse, because reading the archive is public (see the section above). One admin
+logs in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`:
 
 ```
 POST /api/auth/login  { username, password }
@@ -299,7 +331,7 @@ POST /api/auth/login  { username, password }
   -> issues a 256-bit random token; only its SHA-256 is stored
   -> { token, expiresAt, user }
 
-Authorization: Bearer <token>   on every /api/media request
+Authorization: Bearer <token>   on every route that changes the archive
   -> UPDATE admin_sessions ... WHERE token_hash = ? AND expires_at > now()
      (one atomic statement: validates, enforces expiry, touches last_used_at)
 ```
@@ -307,6 +339,10 @@ Authorization: Bearer <token>   on every /api/media request
 Why sessions instead of JWTs: revocation works (logout is instant, expiry is real),
 and there is no signing secret to manage. The token never reaches the database in
 raw form, so a DB leak yields no usable sessions.
+
+`optionalAuth` runs the same check but treats a missing or invalid credential as
+"visitor" rather than a rejection — a public read must not fail because an
+*optional* token was stale.
 
 ## Search (Phase 5)
 
@@ -342,25 +378,28 @@ which the UI turns into a `?t=` deep link into the player.
 
 ## API (Phases 1–2, 5)
 
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/health` | — |
-| POST | `/api/auth/login` | username + password → session token |
-| POST | `/api/auth/logout` | revoke the presented session token |
-| GET | `/api/auth/me` | validate a stored token (used on app boot) |
-| GET | `/api/media` | list own items (page/limit) |
-| GET | `/api/media/quota` | storage used/limit |
-| GET | `/api/media/:id` | owned item |
-| PATCH | `/api/media/:id` | title/description/visibility/tags |
-| DELETE | `/api/media/:id` | item + R2 objects |
-| POST | `/api/media/upload/start` | presigned PUT |
-| POST | `/api/media/upload/confirm` | verify + record + enqueue transcription |
-| GET | `/api/media/:id/captions` | captions with segments (auth + ownership) |
-| GET | `/api/media/:id/caption-status` | caption status + active job info |
-| POST | `/api/media/:id/captions/generate` | (re)generate captions |
-| PUT | `/api/media/:id/captions/:captionId` | bulk-replace segments (editor) |
-| DELETE | `/api/media/:id/captions/:captionId` | delete captions |
-| GET | `/api/search` | `?q=&page=&limit=` — titles, tags, descriptions, transcripts |
-| GET | `/api/search/suggestions` | `?q=&limit=` — typeahead titles + tags |
-| GET | `/api/settings` | current provider + model, per-provider defaults, key availability |
-| PUT | `/api/settings` | set `{ provider, model? }` — omit `model` to take the provider default |
+`🔓` public · `🔒` admin. See "Audience" above.
+
+| | Method | Path | Notes |
+|---|---|---|---|
+| 🔓 | GET | `/health` | — |
+| 🔓 | POST | `/api/auth/login` | username + password → session token |
+| 🔒 | POST | `/api/auth/logout` | revoke the presented session token |
+| 🔒 | GET | `/api/auth/me` | validate a stored token (used on app boot) |
+| 🔓 | GET | `/api/media` | list the archive (page/limit) |
+| 🔒 | GET | `/api/media/quota` | storage used/limit |
+| 🔓 | GET | `/api/media/:id` | one item |
+| 🔒 | PATCH | `/api/media/:id` | title/description/tags |
+| 🔒 | DELETE | `/api/media/:id` | item + R2 objects |
+| 🔒 | POST | `/api/media/upload/start` | presigned PUT |
+| 🔒 | POST | `/api/media/upload/confirm` | verify + record + enqueue transcription |
+| 🔓 | GET | `/api/media/:id/captions` | captions with timed segments |
+| 🔓 | GET | `/api/media/:id/caption-status` | status (error text + job info: admin only) |
+| 🔒 | POST | `/api/media/:id/captions/generate` | (re)generate captions |
+| 🔒 | PUT | `/api/media/:id/captions/:captionId` | bulk-replace segments (editor) |
+| 🔒 | DELETE | `/api/media/:id/captions/:captionId` | delete captions |
+| 🔓 | GET | `/api/media/:id/files/:fileId/url` | short-lived signed playback URL |
+| 🔓 | GET | `/api/search` | `?q=&page=&limit=` — titles, tags, descriptions, transcripts |
+| 🔓 | GET | `/api/search/suggestions` | `?q=&limit=` — typeahead titles + tags |
+| 🔒 | GET | `/api/settings` | current provider + model, per-provider defaults, key availability |
+| 🔒 | PUT | `/api/settings` | set `{ provider, model? }` — omit `model` to take the provider default |

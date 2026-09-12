@@ -70,6 +70,19 @@ const escapeLike = (value: SQL | unknown): SQL =>
   sql`replace(replace(replace(${value}, '\\', '\\\\'), '%', '\\%'), '_', '\\_')`;
 
 /**
+ * The owner predicate, or nothing at all.
+ *
+ * The archive is public, so these queries run in two audiences: a visitor, who
+ * must see every row, and the admin, whose reads stay owner-scoped. Rather than
+ * build two query variants (and let them drift), the predicate is appended only
+ * when an owner is given, and each query keeps a `WHERE TRUE` anchor so the
+ * statement is valid either way. For the admin the SQL is byte-for-byte what it
+ * was before, index use included.
+ */
+const ownerFilter = (userId?: string): SQL =>
+  userId ? sql`AND m.user_id = ${userId}` : sql``;
+
+/**
  * Row shape returned by the ranking query. A type alias, not an interface, so it
  * satisfies Drizzle's `Record<string, unknown>` constraint on `execute<T>`.
  */
@@ -92,7 +105,7 @@ type RankRow = {
  */
 async function rankMedia(
   db: DB,
-  userId: string,
+  userId: string | undefined,
   query: string,
   limit: number,
   offset: number,
@@ -133,7 +146,7 @@ async function rankMedia(
     FROM media_items m
     CROSS JOIN p
     LEFT JOIN lyric l ON l.media_item_id = m.id
-    WHERE m.user_id = ${userId}
+    WHERE TRUE ${ownerFilter(userId)}
       AND p.norm <> ''
       AND (
         m.search_vector @@ p.tsq
@@ -160,7 +173,7 @@ async function rankMedia(
 
 export async function searchMedia(
   db: DB,
-  userId: string,
+  userId: string | undefined,
   opts: { query: string; page?: number; limit?: number },
 ): Promise<SearchPage> {
   const query = opts.query.trim().slice(0, MAX_QUERY_LENGTH);
@@ -201,7 +214,11 @@ export async function searchMedia(
   const itemRows = await db
     .select()
     .from(mediaItems)
-    .where(and(eq(mediaItems.userId, userId), inArray(mediaItems.id, ids)));
+    .where(
+      userId
+        ? and(eq(mediaItems.userId, userId), inArray(mediaItems.id, ids))
+        : inArray(mediaItems.id, ids),
+    );
   const itemsById = new Map<string, MediaItem>();
   for (const item of itemRows) itemsById.set(item.id, item);
 
@@ -270,7 +287,7 @@ export interface Suggestion {
  */
 export async function suggest(
   db: DB,
-  userId: string,
+  userId: string | undefined,
   query: string,
   limit = 8,
 ): Promise<Suggestion[]> {
@@ -284,7 +301,7 @@ export async function suggest(
   const titles = await db.execute<{ title: string }>(sql`
     SELECT m.title
     FROM media_items m
-    WHERE m.user_id = ${userId}
+    WHERE TRUE ${ownerFilter(userId)}
       AND archivedrop_normalize_text(m.title) LIKE ${pattern()} ESCAPE '\'
     ORDER BY (archivedrop_normalize_text(m.title) LIKE ${escapeLike(normalized)} || '%' ESCAPE '\') DESC,
              length(m.title)
@@ -294,7 +311,7 @@ export async function suggest(
   const tags = await db.execute<{ tag: string }>(sql`
     SELECT DISTINCT tag
     FROM media_items m, unnest(m.tags) AS tag
-    WHERE m.user_id = ${userId}
+    WHERE TRUE ${ownerFilter(userId)}
       AND archivedrop_normalize_text(tag) LIKE ${pattern()} ESCAPE '\'
     ORDER BY tag
     LIMIT ${perKind}

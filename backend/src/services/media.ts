@@ -49,6 +49,19 @@ export function serializeMediaItem(
   };
 }
 
+/**
+ * A media item as a visitor sees it.
+ *
+ * `captionErrorMessage` holds whatever the provider returned — capped error
+ * bodies, model ids, file sizes. It is what the admin needs to debug a failed
+ * job, and noise at best, internal detail at worst, for everyone else. Narrowing
+ * the public surface happens here, in one greppable place, rather than by hand
+ * at every read route that might forget.
+ */
+export function toPublicMediaItem(item: MediaItemDTO): MediaItemDTO {
+  return item.captionErrorMessage === null ? item : { ...item, captionErrorMessage: null };
+}
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
@@ -69,16 +82,24 @@ function groupByItem(rows: FileRow[]): Map<string, (typeof mediaFiles.$inferSele
   return map;
 }
 
+/**
+ * List media items, newest first.
+ *
+ * `userId` is optional: omitted means "no owner filter", which is what the
+ * public archive uses. There is one owner today, so the two are the same rows —
+ * but the filter is a real constraint where it is given, not an assumption, so
+ * the admin routes keep passing it and the public ones simply don't.
+ */
 export async function listUserMedia(
   db: DB,
-  userId: string,
+  userId?: string,
   opts: { page?: number; limit?: number } = {},
 ): Promise<{ items: MediaItemDTO[]; page: number; limit: number; total: number; totalPages: number }> {
   const page = Math.max(1, opts.page ?? 1);
   const limit = Math.min(100, Math.max(1, opts.limit ?? 20));
   const offset = (page - 1) * limit;
 
-  const where = eq(mediaItems.userId, userId);
+  const where = userId ? eq(mediaItems.userId, userId) : undefined;
 
   const [items, [countRow], fileRows] = await Promise.all([
     db.select().from(mediaItems).where(where).orderBy(desc(mediaItems.createdAt)).limit(limit).offset(offset),
@@ -101,13 +122,16 @@ export async function listUserMedia(
   };
 }
 
+/** One item, optionally constrained to an owner. Omitted `userId` = public read. */
 export async function getMediaItem(
   db: DB,
   id: string,
-  userId: string,
+  userId?: string,
 ): Promise<MediaItemDTO | null> {
   const item = await db.query.mediaItems.findFirst({
-    where: and(eq(mediaItems.id, id), eq(mediaItems.userId, userId)),
+    where: userId
+      ? and(eq(mediaItems.id, id), eq(mediaItems.userId, userId))
+      : eq(mediaItems.id, id),
   });
   if (!item) return null;
 

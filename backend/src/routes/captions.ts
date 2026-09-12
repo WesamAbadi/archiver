@@ -1,14 +1,19 @@
 /**
- * Caption routes — read, generate (enqueue), status, edit, delete.
+ * Caption routes — read the transcript (public), manage it (admin).
  *
- * Every route is auth-checked and ownership-verified (fixes the old
- * unauthenticated transcript endpoints).
+ * Reading a transcript is part of reading the archive, so `GET` is public; the
+ * old codebase's bug was the opposite — transcript endpoints that were readable
+ * unauthenticated *by accident*, on a private app. Here it is intentional and
+ * scoped: only the caption row and its timed segments are exposed, never the
+ * job's attempts or the provider's error text.
+ *
+ * Everything that writes — generate, edit, delete — is admin-only.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { and, eq, asc, inArray, desc } from 'drizzle-orm';
 import type { AppEnv } from '../env';
-import { requireAuth } from '../auth';
+import { getAdmin, optionalAuth, requireAuth } from '../auth';
 import type { DB } from '../db/client';
 import { captionJobs, captionSegments, captions, mediaItems } from '../db/schema';
 import * as captionService from '../services/captions';
@@ -16,12 +21,15 @@ import { backoffSeconds } from '../services/captions';
 
 export const captionRoutes = new Hono<AppEnv>();
 
-captionRoutes.use('*', requireAuth);
-
-/** Verify the media item belongs to the user. */
-async function ownedMediaItem(db: DB, mediaItemId: string, userId: string) {
+/**
+ * Resolve the media item — owner-scoped only when an owner is given.
+ * Returns the row itself, because callers read `captionStatus` off it.
+ */
+async function resolveMediaItem(db: DB, mediaItemId: string, userId?: string) {
   return db.query.mediaItems.findFirst({
-    where: and(eq(mediaItems.id, mediaItemId), eq(mediaItems.userId, userId)),
+    where: userId
+      ? and(eq(mediaItems.id, mediaItemId), eq(mediaItems.userId, userId))
+      : eq(mediaItems.id, mediaItemId),
   });
 }
 
@@ -29,11 +37,12 @@ async function ownedMediaItem(db: DB, mediaItemId: string, userId: string) {
 // Read
 // ---------------------------------------------------------------------------
 
-captionRoutes.get('/:mediaItemId/captions', async (c) => {
+// PUBLIC — the transcript is archive content, and the reason to search at all.
+captionRoutes.get('/:mediaItemId/captions', optionalAuth, async (c) => {
   const db = c.get('db');
-  const admin = c.get('admin');
+  const admin = getAdmin(c);
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
+  const item = await resolveMediaItem(db, c.req.param('mediaItemId'), admin?.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const rows = await db.query.captions.findMany({
@@ -48,11 +57,18 @@ captionRoutes.get('/:mediaItemId/captions', async (c) => {
   return c.json({ success: true, data: rows });
 });
 
-captionRoutes.get('/:mediaItemId/caption-status', async (c) => {
+/**
+ * PUBLIC — polling target while a job runs, so the watch page can update
+ * itself. A visitor learns *whether* a transcript is coming (which is a
+ * property of the archive they can see anyway); the failure text and the job's
+ * retry bookkeeping are returned to the admin only, because those are about the
+ * pipeline rather than the content.
+ */
+captionRoutes.get('/:mediaItemId/caption-status', optionalAuth, async (c) => {
   const db = c.get('db');
-  const admin = c.get('admin');
+  const admin = getAdmin(c);
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
+  const item = await resolveMediaItem(db, c.req.param('mediaItemId'), admin?.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const job = await db.query.captionJobs.findFirst({
@@ -68,16 +84,17 @@ captionRoutes.get('/:mediaItemId/caption-status', async (c) => {
     success: true,
     data: {
       captionStatus: item.captionStatus,
-      errorMessage: item.captionErrorMessage,
+      errorMessage: admin ? item.captionErrorMessage : null,
       generatedAt: item.captionGeneratedAt,
-      job: job
-        ? {
-            id: job.id,
-            status: job.status,
-            attempts: job.attempts,
-            maxAttempts: job.maxAttempts,
-          }
-        : null,
+      job:
+        admin && job
+          ? {
+              id: job.id,
+              status: job.status,
+              attempts: job.attempts,
+              maxAttempts: job.maxAttempts,
+            }
+          : null,
     },
   });
 });
@@ -86,11 +103,11 @@ captionRoutes.get('/:mediaItemId/caption-status', async (c) => {
 // Generate (enqueue)
 // ---------------------------------------------------------------------------
 
-captionRoutes.post('/:mediaItemId/captions/generate', async (c) => {
+captionRoutes.post('/:mediaItemId/captions/generate', requireAuth, async (c) => {
   const db = c.get('db');
   const admin = c.get('admin');
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
+  const item = await resolveMediaItem(db, c.req.param('mediaItemId'), admin.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const result = await captionService.createCaptionJob(db, item.id, admin.id);
@@ -149,11 +166,11 @@ const segmentUpsertSchema = z.object({
 });
 
 /** Replace all segments of the item's auto caption (bulk save from the editor). */
-captionRoutes.put('/:mediaItemId/captions/:captionId', async (c) => {
+captionRoutes.put('/:mediaItemId/captions/:captionId', requireAuth, async (c) => {
   const db = c.get('db');
   const admin = c.get('admin');
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
+  const item = await resolveMediaItem(db, c.req.param('mediaItemId'), admin.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const caption = await db.query.captions.findFirst({
@@ -204,11 +221,11 @@ captionRoutes.put('/:mediaItemId/captions/:captionId', async (c) => {
 // Delete
 // ---------------------------------------------------------------------------
 
-captionRoutes.delete('/:mediaItemId/captions/:captionId', async (c) => {
+captionRoutes.delete('/:mediaItemId/captions/:captionId', requireAuth, async (c) => {
   const db = c.get('db');
   const admin = c.get('admin');
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
+  const item = await resolveMediaItem(db, c.req.param('mediaItemId'), admin.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const caption = await db.query.captions.findFirst({

@@ -55,7 +55,7 @@ src/
     auth/         session store, hooks, LoginPage, guards
     media/        every media + caption query/mutation (one place)
     library/      LibraryPage, MediaCard, UploadDialog
-    search/       SearchPage + its queries (results keyed by term, not by page)
+    search/       SearchBar, SearchResults + queries (results keyed by term, not page)
     watch/        WatchPage, TranscriptPanel
     editor/       CaptionEditorPage
     settings/     SettingsPage, TranscriptionSettings (provider + model), api.ts
@@ -71,6 +71,38 @@ Three conventions worth keeping:
 - **`MediaCard` is the only card.** The library and search results render the
   same component; search just passes `match`, which adds the matched-field chips
   and the lyric line and retargets the card's link to `/watch/:id?t=…`.
+
+---
+
+## Who can do what
+
+Reading is public; changing is the owner's. The split is by route, not by layout:
+
+| Route | Guard | Notes |
+|---|---|---|
+| `/` → `/library` | — | The whole archive, plus the search box over it |
+| `/watch/:id` | — | Player, transcript, details |
+| `/watch/:id/edit` | `RequireAuth` | The caption editor |
+| `/settings` | `RequireAuth` | Provider, storage, session |
+
+`AppShell` wraps everything, so a visitor gets the same header and footer — the
+difference is which controls exist. They are **absent rather than disabled**
+(the card's delete button, the watch page's edit/re-transcribe/delete, the
+library's upload button and status filters), because a greyed-out control still
+advertises a capability the viewer does not have.
+
+`/media/quota` is admin-only, so the quota meter is its own component that mounts
+only when a session exists. Fetching it anonymously would be a guaranteed 401 —
+which the API client treats as a dead session, signing the owner out for nothing.
+
+### One page for browsing and searching
+
+There is no `/search`. It had the same grid, the same card and the same
+pagination as the library and differed only in what filled them, so a query now
+swaps the grid for results in place and stays linkable as `/library?q=…`.
+`SearchBar` owns the `?q=` parameter, debounced into the URL so typing doesn't
+stack a history entry per keystroke; `SearchResults` is a pure function of the
+term and page, which is what lets the back button and a shared link both work.
 
 ---
 

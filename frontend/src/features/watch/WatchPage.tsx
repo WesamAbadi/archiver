@@ -18,9 +18,21 @@ import {
   useMediaItem,
   usePlaybackUrl,
 } from '@/features/media/api';
+import { useSession } from '@/features/auth/hooks';
+import { useDocumentTitle } from '@/lib/useDocumentTitle';
+import { CAPTION_STATUS, isInFlight } from '@/features/media/captionStatus';
 import { ActiveCaption, TranscriptPanel } from './TranscriptPanel';
 
+/**
+ * Watch — the whole point of the archive, so it is public.
+ *
+ * A visitor gets the player, the transcript and the details. Every control that
+ * changes the item (edit, re-transcribe, delete) belongs to the admin and is
+ * simply not rendered for anyone else — the transcript panel is the one place
+ * where the two audiences read the same thing.
+ */
 export function WatchPage() {
+  const isAdmin = Boolean(useSession());
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -28,15 +40,16 @@ export function WatchPage() {
   const startAt = Number(searchParams.get('t') ?? '');
 
   const item = useMediaItem(id);
+  useDocumentTitle(item.data?.title);
+
   const file = item.data?.files[0];
   const playback = usePlaybackUrl(id, file?.id);
 
   const captions = useCaptions(id);
   const caption = captions.data?.[0];
 
-  const inFlight =
-    item.data?.captionStatus === 'QUEUED' || item.data?.captionStatus === 'PROCESSING';
-  const status = useCaptionStatus(id, Boolean(inFlight));
+  const inFlight = isInFlight(item.data?.captionStatus);
+  const status = useCaptionStatus(id, inFlight);
 
   const generate = useGenerateCaptions(id ?? '');
   const deleteCaption = useDeleteCaption(id ?? '');
@@ -171,32 +184,34 @@ export function WatchPage() {
           Library
         </Link>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {segments.length > 0 && (
-            <Link to={`/watch/${media.id}/edit`}>
-              <Button variant="secondary" size="sm">
-                <Pencil className="size-4" />
-                Edit transcript
-              </Button>
-            </Link>
-          )}
+        {isAdmin && (
+          <div className="flex flex-wrap items-center gap-2">
+            {segments.length > 0 && (
+              <Link to={`/watch/${media.id}/edit`}>
+                <Button variant="secondary" size="sm">
+                  <Pencil className="size-4" />
+                  Edit transcript
+                </Button>
+              </Link>
+            )}
 
-          <Button
-            variant="secondary"
-            size="sm"
-            loading={generate.isPending}
-            disabled={inFlight}
-            onClick={handleRegenerate}
-          >
-            <RefreshCw className="size-4" />
-            {segments.length > 0 ? 'Re-transcribe' : 'Transcribe'}
-          </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={generate.isPending}
+              disabled={inFlight}
+              onClick={handleRegenerate}
+            >
+              <RefreshCw className="size-4" />
+              {segments.length > 0 ? 'Re-transcribe' : 'Transcribe'}
+            </Button>
 
-          <Button variant="danger" size="sm" onClick={() => setConfirmItemDelete(true)}>
-            <Trash2 className="size-4" />
-            Delete
-          </Button>
-        </div>
+            <Button variant="danger" size="sm" onClick={() => setConfirmItemDelete(true)}>
+              <Trash2 className="size-4" />
+              Delete
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -204,8 +219,8 @@ export function WatchPage() {
           <h1 className="font-display text-2xl text-ink">{media.title}</h1>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Badge tone={media.captionStatus === 'FAILED' ? 'danger' : 'neutral'}>
-              {media.captionStatus.toLowerCase()}
+            <Badge tone={CAPTION_STATUS[media.captionStatus].tone}>
+              {CAPTION_STATUS[media.captionStatus].label}
             </Badge>
             <span className="font-mono text-[11px] text-ink-faint">
               {formatDuration(media.duration)} · {formatBytes(media.size)}
@@ -304,7 +319,7 @@ export function WatchPage() {
         <aside className="rounded-lg border border-border bg-surface">
           <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
             <h2 className="font-display text-base text-ink">Transcript</h2>
-            {caption && (
+            {isAdmin && caption && (
               <button
                 type="button"
                 onClick={handleDeleteCaption}
@@ -323,7 +338,7 @@ export function WatchPage() {
                   {status.data?.captionStatus === 'PROCESSING' ? 'Transcribing…' : 'Queued…'}
                 </p>
                 <p className="text-[13px] text-ink-faint">
-                  Whisper is working through the file. This panel updates on its own.
+                  Transcription is working through the file. This panel updates on its own.
                 </p>
               </div>
             ) : captions.isPending ? (
@@ -333,28 +348,39 @@ export function WatchPage() {
             ) : segments.length > 0 ? (
               <TranscriptPanel segments={segments} currentTime={currentTime} onSeek={seek} />
             ) : media.captionStatus === 'FAILED' ? (
-              <div className="px-5 py-10 text-center">
-                <p className="text-sm text-danger">Transcription failed.</p>
-                <p className="mt-2 text-[13px] text-ink-muted">
-                  {media.captionErrorMessage ?? 'No error details were recorded.'}
-                </p>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="mt-4"
-                  loading={generate.isPending}
-                  onClick={handleRegenerate}
-                >
-                  Try again
-                </Button>
-              </div>
+              // The provider's error text is admin-only (the API withholds it
+              // from visitors), so a visitor gets a plain statement instead of
+              // an empty-looking failure panel.
+              isAdmin ? (
+                <div className="px-5 py-10 text-center">
+                  <p className="text-sm text-danger">Transcription failed.</p>
+                  <p className="mt-2 text-[13px] text-ink-muted">
+                    {media.captionErrorMessage ?? 'No error details were recorded.'}
+                  </p>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="mt-4"
+                    loading={generate.isPending}
+                    onClick={handleRegenerate}
+                  >
+                    Try again
+                  </Button>
+                </div>
+              ) : (
+                <div className="px-5 py-10 text-center">
+                  <p className="text-sm text-ink-muted">
+                    No transcript for this recording.
+                  </p>
+                </div>
+              )
             ) : (
               <div className="px-5 py-10 text-center">
                 <p className="text-sm text-ink-muted">
                   No transcript yet.
                   {kind !== 'audio' && ' Transcription is available for audio files.'}
                 </p>
-                {kind === 'audio' && (
+                {isAdmin && kind === 'audio' && (
                   <Button
                     variant="secondary"
                     size="sm"

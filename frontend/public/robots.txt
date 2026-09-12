@@ -1,0 +1,14 @@
+# The archive is public to read, so it is meant to be found.
+#
+# /login and /settings are the owner's routes. Both serve the same client-rendered
+# shell as everything else, so there is nothing there for a crawler to index —
+# and an indexed login page is only ever noise in search results.
+#
+# No Sitemap line: the item URLs live in Postgres and change constantly, so a
+# static sitemap would be wrong the moment it was built. One would need a route
+# on the API that generates it from the database.
+
+User-agent: *
+Allow: /
+Disallow: /login
+Disallow: /settings

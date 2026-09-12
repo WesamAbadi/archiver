@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, KeyRound, Lock, User } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Eye, EyeOff, KeyRound, Lock, User } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { ApiError } from '@/lib/api';
@@ -12,6 +12,10 @@ import { useLogin } from './hooks';
  * Username + password against the API; the server returns an opaque session
  * token. There is no sign-up, no OAuth and no password reset — this is a
  * single-owner archive, so the form stays a form.
+ *
+ * Worth keeping in mind: this page is for the *owner*. Browsing the archive
+ * needs no account, so a visitor who lands here (from the header, or an old
+ * bookmark) is offered the way back rather than being left at a dead end.
  */
 export function LoginPage() {
   const [username, setUsername] = useState('');
@@ -61,10 +65,8 @@ export function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-accent">ArchiveDrop</p>
-          <h1 className="mt-3 font-display text-3xl text-ink">Private archive</h1>
-          <p className="mt-2 text-sm text-ink-muted">
-            Sign in to manage the collection.
-          </p>
+          <h1 className="mt-3 font-display text-3xl text-ink">Owner sign-in</h1>
+          <p className="mt-2 text-sm text-ink-muted">Sign in to manage the collection.</p>
         </div>
 
         <form
@@ -126,7 +128,17 @@ export function LoginPage() {
         </form>
 
         <p className="mt-6 text-center text-[13px] text-ink-faint">
-          Single-owner archive. There are no user accounts.
+          Single-owner archive. There are no user accounts — browsing needs none.
+        </p>
+
+        <p className="mt-4 text-center">
+          <Link
+            to="/library"
+            className="inline-flex items-center gap-2 text-[13px] text-ink-muted transition-colors hover:text-ink"
+          >
+            <ArrowLeft className="size-4" />
+            Back to the archive
+          </Link>
         </p>
       </div>
     </main>

@@ -4,10 +4,37 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#100e0c" />
-    <title>ArchiveDrop — Your Personal Media Archive</title>
+    <title>ArchiveDrop — a transcribed audio and video archive</title>
     <meta
       name="description"
-      content="A private, single-owner archive for your audio, video and their transcripts."
+      content="Browse, search and play every recording in the archive. Full-text search across titles, tags and full transcripts."
+    />
+
+    <!--
+      Open Graph / Twitter metadata.
+
+      This is a client-rendered SPA, so crawlers see this one shell for every
+      URL — `useDocumentTitle` sets a better title per route once the app is
+      running, but social unfurlers and crawlers read these tags without
+      executing JavaScript. Per-item URLs therefore unfurl as the site, not as
+      the recording. Real per-item metadata needs prerendering or SSR.
+
+      No `og:url` or canonical on purpose: both must be absolute, and the origin
+      is still `archivedrop.pages.dev`. Add them (and the sitemap) when a custom
+      domain exists, rather than baking in a URL that will change.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ArchiveDrop" />
+    <meta property="og:title" content="ArchiveDrop — a transcribed audio and video archive" />
+    <meta
+      property="og:description"
+      content="Browse, search and play every recording in the archive. Full-text search across titles, tags and full transcripts."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="ArchiveDrop" />
+    <meta
+      name="twitter:description"
+      content="Browse, search and play every recording in the archive."
     />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />

@@ -1,9 +1,14 @@
 /**
- * Media routes — archive CRUD + presigned upload lifecycle.
+ * Media routes — public reading, admin-only changing.
  *
- * Single admin: every route requires a session and every query is still scoped
- * to the admin's owner id (defensive — ownership stays a real constraint, not
- * an assumption, if a second owner ever appears).
+ * The archive is public, so browsing it (list, one item, playback URL) needs no
+ * session, and `optionalAuth` identifies the admin when one is present so the
+ * same handler can return management detail to them alone.
+ *
+ * Every route that *changes* the archive is still admin-only, and says so with
+ * its own `requireAuth` rather than inheriting a blanket guard. There is
+ * deliberately no `use('*', …)` here: adding a route should require deciding
+ * who it is for, not silently joining whichever group the file defaults to.
  *
  * Upload flow (nothing big transits the Worker):
  *   1. POST /media/upload/start    -> { mediaItemId, uploadUrl, key }
@@ -13,15 +18,15 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
-import { requireAuth } from '../auth';
+import { getAdmin, optionalAuth, requireAuth } from '../auth';
 import * as mediaService from '../services/media';
+import { toPublicMediaItem } from '../services/media';
+
 import * as captionService from '../services/captions';
 import { getStorageQuota } from '../services/users';
 import { isAllowedMimeType, presignedGetUrl } from '../services/r2';
 
 export const mediaRoutes = new Hono<AppEnv>();
-
-mediaRoutes.use('*', requireAuth);
 
 // ---------------------------------------------------------------------------
 // List / get / update / delete
@@ -32,30 +37,43 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
-mediaRoutes.get('/', async (c) => {
-  const admin = c.get('admin');
+// PUBLIC — anyone may browse the archive.
+mediaRoutes.get('/', optionalAuth, async (c) => {
+  const admin = getAdmin(c);
 
   const query = listQuerySchema.safeParse(c.req.query());
   if (!query.success) {
     return c.json({ success: false, error: 'Invalid query parameters' }, 400);
   }
 
-  const result = await mediaService.listUserMedia(c.get('db'), admin.id, query.data);
-  return c.json({ success: true, data: result.items, pagination: { ...result } });
+  const { items, ...pagination } = await mediaService.listUserMedia(
+    c.get('db'),
+    admin?.id,
+    query.data,
+  );
+
+  return c.json({
+    success: true,
+    data: admin ? items : items.map(toPublicMediaItem),
+    // `items` is the payload; the envelope's pagination is counts only.
+    pagination,
+  });
 });
 
-mediaRoutes.get('/quota', async (c) => {
+// ADMIN — storage usage is a management number, not archive content.
+mediaRoutes.get('/quota', requireAuth, async (c) => {
   const admin = c.get('admin');
   const quota = await getStorageQuota(c.get('db'), admin.id);
   return c.json({ success: true, data: quota });
 });
 
-mediaRoutes.get('/:id', async (c) => {
-  const admin = c.get('admin');
-  const item = await mediaService.getMediaItem(c.get('db'), c.req.param('id'), admin.id);
+// PUBLIC — one item. Registered after /quota so the static path wins.
+mediaRoutes.get('/:id', optionalAuth, async (c) => {
+  const admin = getAdmin(c);
+  const item = await mediaService.getMediaItem(c.get('db'), c.req.param('id'), admin?.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
-  return c.json({ success: true, data: item });
+  return c.json({ success: true, data: admin ? item : toPublicMediaItem(item) });
 });
 
 // ---------------------------------------------------------------------------
@@ -73,10 +91,12 @@ const PLAYBACK_URL_TTL_SECONDS = 6 * 60 * 60;
  * responses — embedding them in `/media` would mean N signatures per page load
  * and URLs that expire while the page sits open.
  */
-mediaRoutes.get('/:id/files/:fileId/url', async (c) => {
-  const admin = c.get('admin');
+// PUBLIC — playback. The bucket stays private; this hands out a short-lived
+// signed URL for one item, which is what makes the archive watchable at all.
+mediaRoutes.get('/:id/files/:fileId/url', optionalAuth, async (c) => {
+  const admin = getAdmin(c);
 
-  const item = await mediaService.getMediaItem(c.get('db'), c.req.param('id'), admin.id);
+  const item = await mediaService.getMediaItem(c.get('db'), c.req.param('id'), admin?.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const file = item.files.find((f) => f.id === c.req.param('fileId'));
@@ -94,7 +114,7 @@ const updateSchema = z.object({
   tags: z.array(z.string().min(1).max(50)).max(20).optional(),
 });
 
-mediaRoutes.patch('/:id', async (c) => {
+mediaRoutes.patch('/:id', requireAuth, async (c) => {
   const admin = c.get('admin');
 
   const body = await c.req.json().catch(() => null);
@@ -114,7 +134,7 @@ mediaRoutes.patch('/:id', async (c) => {
   return c.json({ success: true, data: updated });
 });
 
-mediaRoutes.delete('/:id', async (c) => {
+mediaRoutes.delete('/:id', requireAuth, async (c) => {
   const admin = c.get('admin');
 
   const deleted = await mediaService.deleteMediaItem(
@@ -141,7 +161,7 @@ const uploadStartSchema = z.object({
   tags: z.array(z.string().min(1).max(50)).max(20).default([]),
 });
 
-mediaRoutes.post('/upload/start', async (c) => {
+mediaRoutes.post('/upload/start', requireAuth, async (c) => {
   const admin = c.get('admin');
 
   const body = await c.req.json().catch(() => null);
@@ -196,7 +216,7 @@ const uploadConfirmSchema = z.object({
   duration: z.number().int().min(0).max(86_400).nullable().optional(),
 });
 
-mediaRoutes.post('/upload/confirm', async (c) => {
+mediaRoutes.post('/upload/confirm', requireAuth, async (c) => {
   const admin = c.get('admin');
 
   const body = await c.req.json().catch(() => null);

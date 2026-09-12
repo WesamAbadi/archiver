@@ -1,10 +1,11 @@
 import { Link } from 'react-router-dom';
 import { FileAudio, FileVideo, Image as ImageIcon, Trash2 } from 'lucide-react';
-import { Badge, type BadgeTone } from '@/components/ui/Badge';
+import { Badge } from '@/components/ui/Badge';
 import { Highlight } from '@/components/ui/Highlight';
 import { formatBytes, formatDuration, formatRelative, formatTimecode, mediaKind } from '@/lib/format';
 import { dirProps } from '@/lib/rtl';
-import type { CaptionStatus, MediaItem, SearchMatch, SearchMatchField } from '@/lib/types';
+import { CAPTION_STATUS } from '@/features/media/captionStatus';
+import type { MediaItem, SearchMatch, SearchMatchField } from '@/lib/types';
 
 const KIND_ICONS = {
   audio: FileAudio,
@@ -12,20 +13,6 @@ const KIND_ICONS = {
   image: ImageIcon,
   other: FileAudio,
 } as const;
-
-/**
- * One status → one badge. The old UI derived this in three components with
- * different label sets ("Processing", "In progress", "Generating…"), so the
- * same item described itself differently depending on the screen.
- */
-const STATUS_TONES: Record<CaptionStatus, { tone: BadgeTone; label: string }> = {
-  PENDING: { tone: 'neutral', label: 'No captions' },
-  QUEUED: { tone: 'info', label: 'Queued' },
-  PROCESSING: { tone: 'warning', label: 'Transcribing' },
-  COMPLETED: { tone: 'success', label: 'Captions' },
-  FAILED: { tone: 'danger', label: 'Failed' },
-  SKIPPED: { tone: 'neutral', label: 'Not applicable' },
-};
 
 const MATCH_LABELS: Record<SearchMatchField, string> = {
   title: 'title',
@@ -54,7 +41,12 @@ export function MediaCard({
   term,
 }: {
   item: MediaItem;
-  onDelete: (item: MediaItem) => void;
+  /**
+   * Omitted for visitors. Deleting is the admin's alone, and a card that
+   * renders a disabled button still advertises a capability the viewer does
+   * not have — so the affordance is absent rather than inert.
+   */
+  onDelete?: (item: MediaItem) => void;
   /** Present only in search results. */
   match?: SearchMatch;
   /** The user's search term, for highlighting. */
@@ -63,7 +55,7 @@ export function MediaCard({
   const file = item.files[0];
   const kind = mediaKind(file?.mimeType);
   const Icon = KIND_ICONS[kind];
-  const status = STATUS_TONES[item.captionStatus];
+  const status = CAPTION_STATUS[item.captionStatus];
   const lyric = match?.lyric ?? null;
   const target = lyric ? `/watch/${item.id}?t=${lyric.startTime}` : `/watch/${item.id}`;
 
@@ -133,14 +125,16 @@ export function MediaCard({
         <p className="mt-auto text-[11px] text-ink-faint">{formatRelative(item.createdAt)}</p>
       </Link>
 
-      <button
-        type="button"
-        onClick={() => onDelete(item)}
-        aria-label={`Delete ${item.title}`}
-        className="absolute right-3 top-3 rounded-sm bg-surface-2/90 p-2 text-ink-faint opacity-0 transition-opacity hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
-      >
-        <Trash2 className="size-4" />
-      </button>
+      {onDelete && (
+        <button
+          type="button"
+          onClick={() => onDelete(item)}
+          aria-label={`Delete ${item.title}`}
+          className="absolute right-3 top-3 rounded-sm bg-surface-2/90 p-2 text-ink-faint opacity-0 transition-opacity hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <Trash2 className="size-4" />
+        </button>
+      )}
     </article>
   );
 }

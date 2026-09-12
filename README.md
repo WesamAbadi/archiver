@@ -1,8 +1,10 @@
 # ArchiveDrop
 
-A private, single-owner media archive. Upload audio, video or images straight to
-your own storage, get a timestamped transcript back automatically, edit it, and
-search across titles, tags, notes **and lyrics**.
+A media archive that is **public to read and single-owner to change**. Visitors
+browse, search and play everything — including inside the transcripts; only the
+owner can upload, edit or delete. Audio, video and images go straight to your own
+storage, come back with a timestamped transcript, and are searchable across
+titles, tags, notes **and lyrics**.
 
 Rebuilt end to end on Cloudflare. The old Express + Prisma + React app was
 deleted; [`MIGRATION_PLAN.md`](./MIGRATION_PLAN.md) records what was replaced and
@@ -27,6 +29,10 @@ Neon Postgres (via Hyperdrive) ◄────────── transcript + se
   Queues, with retries, a DLQ and a cron sweep that re-sends dropped messages.
 - **Search runs in Postgres.** Arabic normalization lives in the database and is
   applied to both the indexed columns and the query, so they can't disagree.
+- **Reading is public, changing is not.** Routes declare their own audience: a
+  visitor gets the list, the player, the transcript and search; upload, edit,
+  delete and settings require the owner's session. The audience narrows the
+  *payload* too — provider error text and job bookkeeping are the owner's.
 - **The transcription provider is a setting, not a deploy.** Settings →
   Transcription chooses between Groq Whisper (default — real decoded timestamps)
   and Google Gemini, and the model id for either.
@@ -66,17 +72,18 @@ cd frontend && pnpm build && npx wrangler pages deploy dist --project-name archi
 
 ## Auth
 
-Single admin, no accounts. One username and password (`ADMIN_USERNAME` /
-`ADMIN_PASSWORD`); the comparison is constant-time and fails closed if the
-password isn't configured. Sessions are opaque tokens stored server-side as
-SHA-256 hashes, so they are revocable and expire.
+Browsing needs no account. **Managing** needs one: a single admin, no sign-up, no
+OAuth. One username and password (`ADMIN_USERNAME` / `ADMIN_PASSWORD`); the
+comparison is constant-time and fails closed if the password isn't configured.
+Sessions are opaque tokens stored server-side as SHA-256 hashes, so they are
+revocable and expire.
 
-Login is throttled in two layers, because the endpoint is the only
-unauthenticated surface: a Cloudflare rate limit at the edge (per IP, per
-location), and a global failure counter on the admin row that locks the account
-for 15 minutes after 8 failures and clears on any successful login. The edge
-limit alone wouldn't be enough — its counters are per location, so it can be
-walked around by changing IP.
+Login is throttled in two layers, because it is the only place credentials are
+accepted: a Cloudflare rate limit at the edge (per IP, per location), and a
+global failure counter on the admin row that locks the account for 15 minutes
+after 8 failures and clears on any successful login. The edge limit alone
+wouldn't be enough — its counters are per location, so it can be walked around
+by changing IP.
 
 ## Docs
 

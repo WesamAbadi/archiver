@@ -7,6 +7,7 @@
  * and can be revoked — neither of which the old JWT flow could do.
  */
 import { createMiddleware } from 'hono/factory';
+import type { Context } from 'hono';
 import type { AppEnv } from '../env';
 import type { User } from '../db/schema';
 import { createSession, findSession } from '../services/sessions';
@@ -144,6 +145,47 @@ export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
     return c.json({ success: false, error: 'Authentication failed' }, 500);
   }
 });
+
+/**
+ * Identify the admin when a valid session is presented, but never block.
+ *
+ * Read routes use this instead of `requireAuth` because the archive is public:
+ * a visitor gets the content, and a signed-in admin additionally gets the
+ * management detail (transcript error text, active job state, the quota) that
+ * is either noise or internal to everyone else. So the *content* has one code
+ * path, and the audience only changes how much of the response is filled in.
+ */
+export const optionalAuth = createMiddleware<AppEnv>(async (c, next) => {
+  const header = c.req.header('Authorization');
+  const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
+  if (!token) return next();
+
+  try {
+    const db = c.get('db');
+    const session = await findSession(db, await hashSessionToken(token));
+    if (session) {
+      const admin = await getUserById(db, session.userId);
+      if (admin) c.set('admin', admin);
+    }
+  } catch (err) {
+    // A *public read* must not fail because an optional credential could not be
+    // checked. Fall through as anonymous rather than turning this into a 401/500.
+    console.error('[auth] optional session check failed:', err);
+  }
+
+  return next();
+});
+
+/**
+ * The signed-in admin, or `undefined` on a public request.
+ *
+ * `requireAuth` guarantees the value, so `c.get('admin')` is typed as non-null
+ * for those handlers. Public reads have to say otherwise, and one documented
+ * accessor is better than a cast repeated in every read route.
+ */
+export function getAdmin(c: Context<AppEnv>): User | undefined {
+  return c.get('admin') as User | undefined;
+}
 
 declare module 'hono' {
   interface ContextVariableMap {

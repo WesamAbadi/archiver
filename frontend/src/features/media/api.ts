@@ -33,9 +33,17 @@ export const mediaKeys = {
 // Queries
 // ---------------------------------------------------------------------------
 
-export function useMediaList(page: number, limit = 24) {
+/**
+ * The library page.
+ *
+ * `enabled` exists for the home page's merged search: while a query is active
+ * the grid is replaced by results, and fetching a page of the library behind it
+ * would be a request whose response is never rendered.
+ */
+export function useMediaList(page: number, limit = 24, enabled = true) {
   return useQuery({
     queryKey: mediaKeys.list(page, limit),
+    enabled,
     queryFn: async () => {
       const envelope = await api.get<MediaItem[]>(`/media?page=${page}&limit=${limit}`);
       return {

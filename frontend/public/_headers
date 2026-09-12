@@ -25,9 +25,15 @@
 #      new name. There is nothing to go stale, so these are cached for a year
 #      and never revalidated — which also removes a round trip per asset on
 #      every load.
+#
+# ── Robots ───────────────────────────────────────────────────────────────────
+# Reading the archive is public, so the app is meant to be findable. This header
+# used to be `noindex, nofollow`, from when the whole app belonged to the owner.
+# The finer-grained policy lives in `robots.txt`, because every route serves
+# this same shell and cannot be targeted here individually.
 /*
   Cache-Control: no-cache, max-age=0, must-revalidate
-  X-Robots-Tag: noindex, nofollow
+  X-Robots-Tag: all
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
