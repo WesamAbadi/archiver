@@ -28,6 +28,7 @@ Non-goals for v1: URL downloads (yt-dlp), social features (likes/comments/feed/t
 | 3 | Rebuild style | **Fresh rewrite on Hono** | Reuse schema + lessons learned, not old code. Preserve API shape where sensible. |
 | 4 | Feature scope | **Personal archive focus** | Archive, uploads, captions/lyrics, search, public/private sharing. Likes/comments/feed cut for now. |
 | 5 | Transcription | **Groq Whisper** | `verbose_json` response → real `segments[{start, end, text}]` → maps 1:1 into `caption_segments`. Deletes all Gemini timestamp heuristics. |
+| 6 | Naming / branding | **Keep `ArchiveDrop`, no renames** | Product name is already consistent everywhere in code, UI and infra (`archivedrop-api` Worker, `archivedrop-media` bucket, `archivedrop-db` Hyperdrive). Local folder + GitHub repo stay `archiver` — cosmetic only, zero code references. The `-v2` dir suffixes are temporary and become `backend/`/`frontend/` in Phase 6. |
 
 ---
 
@@ -204,7 +205,7 @@ backend-v2/
 - [ ] Groq account tier: free tier caps files at 25MB (url mode); dev tier 100MB — decide tier based on real library sizes; chunking only if needed
 - [ ] Video transcription: extract audio track (where? client-side pre-upload vs separate service) or keep audio-only for v1
 - [ ] Domain strategy: custom domain for R2 delivery + Worker API (e.g. `cdn.` / `api.` subdomains)
-- [ ] Old repo fate: freeze `backend/`+`frontend/` in place and build `backend-v2/` alongside, or delete-and-replace in place?
+- [x] Old repo fate: build `backend-v2/`+`frontend-v2/` alongside, then **delete-and-replace in place** at Phase 6 (renaming `-v2` dirs to `backend/`/`frontend/`). Repo name `archiver` intentionally unchanged (decision #6).
 
 ---
 
