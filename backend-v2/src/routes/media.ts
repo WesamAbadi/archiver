@@ -188,6 +188,12 @@ const uploadConfirmSchema = z.object({
   filename: z.string().min(1).max(255),
   mimeType: z.string().min(1),
   size: z.number().int().min(1),
+  /**
+   * Seconds, measured in the browser — the API never sees the bytes, so this is
+   * the only place the value can come from. Null/absent when the browser can't
+   * decode the file (images, exotic formats); never fails the upload over it.
+   */
+  duration: z.number().int().min(0).max(86_400).nullable().optional(),
 });
 
 mediaRoutes.post('/upload/confirm', async (c) => {
@@ -208,6 +214,7 @@ mediaRoutes.post('/upload/confirm', async (c) => {
       filename: parsed.data.filename,
       mimeType: parsed.data.mimeType,
       size: parsed.data.size,
+      duration: parsed.data.duration ?? null,
     },
   );
 

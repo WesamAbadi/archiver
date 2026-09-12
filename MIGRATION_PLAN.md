@@ -229,6 +229,8 @@ Decision (supersedes "clean up `frontend/`"): **rebuild fresh** against the v2 A
 - Substring matching is skipped below 3 characters, otherwise `or` matches "recording" across the library.
 - Still no Arabic **stemmer**: `يشتاق` and `اشتياق` share a root and do not match each other. Word-level morphology is the next step if it proves to matter, and it needs real data to justify rather than a guess.
 - Two Postgres facts worth not re-learning: **`array_to_string` is STABLE, not IMMUTABLE** (so it can't appear in a generated column — hence the declared-immutable `archivedrop_normalize_texts` wrapper), and **`\p{Arabic}` is not supported in Postgres regexes** (use a codepoint range).
+- **`duration` was never recorded** — surfaced by search, where the card read `— · 7.1 MB · MP3`. With a direct-to-R2 upload the API never sees the bytes, so the only source is the browser: `readMediaDuration()` reads the container metadata (no decoding) and `POST /media/upload/confirm` stores it. Undecodable files and images resolve `null` instead of failing the upload, which is why the read is gated to audio/video mime types and bounded by a timeout. Verified in a browser: MP3 → `0:07`, MP4 → `0:04`, PNG → `null`.
+- One more trap worth knowing: Pages caches `index.html`, so a deploy can be tested against a **stale bundle**. Check the bundle hash the page actually loaded against `curl`ing the live HTML before believing a browser test — it produced one false failure here.
 
 ### Phase 6 — Production hardening
 - [x] Security: every route auth + ownership checked, no debug route, CORS from an explicit allowlist

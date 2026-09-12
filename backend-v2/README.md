@@ -169,10 +169,16 @@ columns read back as numbers. It works whether or not 0002 has been applied.
 1. POST /api/media/upload/start   { filename, mimeType, size, title, ... }
    -> quota checked -> media row created -> { mediaItemId, uploadUrl }
 2. browser: PUT file -> uploadUrl (R2 directly, XHR progress events)
-3. POST /api/media/upload/confirm { mediaItemId, filename, mimeType, size }
+3. POST /api/media/upload/confirm { mediaItemId, filename, mimeType, size, duration }
    -> object verified via R2 head -> file row recorded
    -> audio: caption job created + sent to CAPTION_QUEUE
 ```
+
+`duration` (seconds) is measured **in the browser** from the file's container
+metadata and sent with the confirm call. A direct-to-R2 upload means the API
+never sees the bytes, so the browser is the only place the real value exists.
+Images (and anything the browser can't decode) send `null` — the UI already
+renders `—` — because a cosmetic field must never be able to fail an upload.
 
 ## Transcription pipeline (Phase 2)
 

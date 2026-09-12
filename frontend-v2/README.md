@@ -49,7 +49,7 @@ Worker).
 
 ```
 src/
-  lib/            env, api client, cn, formatters, rtl, useUndoableState, useDebounced
+  lib/            env, api client, cn, formatters, mediaMeta, rtl, useUndoableState, useDebounced
   components/ui/  Button, TextField, Modal, Badge, Spinner, EmptyState, Highlight, toast
   components/     AppShell (nav + quota meter)
   features/

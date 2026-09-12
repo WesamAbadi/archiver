@@ -232,7 +232,7 @@ export async function confirmUpload(
   env: R2Env,
   userId: string,
   mediaItemId: string,
-  input: { filename: string; mimeType: string; size: number },
+  input: { filename: string; mimeType: string; size: number; duration: number | null },
 ): Promise<{ ok: true; item: MediaItemDTO } | { ok: false; error: ConfirmError }> {
   const item = await db.query.mediaItems.findFirst({
     where: and(eq(mediaItems.id, mediaItemId), eq(mediaItems.userId, userId)),
@@ -264,7 +264,7 @@ export async function confirmUpload(
 
   await db
     .update(mediaItems)
-    .set({ size: input.size, updatedAt: new Date() })
+    .set({ size: input.size, duration: input.duration, updatedAt: new Date() })
     .where(eq(mediaItems.id, item.id));
 
   const files = await db.select().from(mediaFiles).where(eq(mediaFiles.mediaItemId, item.id));

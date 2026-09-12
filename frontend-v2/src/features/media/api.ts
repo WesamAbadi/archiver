@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { readMediaDuration } from '@/lib/mediaMeta';
+import { searchKeys } from '@/features/search/api';
 import type {
   Caption,
   CaptionStatusResponse,
@@ -128,6 +130,9 @@ export function useDeleteMedia() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: mediaKeys.all });
+      // A deleted item must also vanish from any cached search results. The two
+      // key spaces don't overlap, so this has to be explicit.
+      void queryClient.invalidateQueries({ queryKey: searchKeys.all });
     },
   });
 }
@@ -143,6 +148,9 @@ export function useUpdateMedia(id: string) {
     onSuccess: (item) => {
       queryClient.setQueryData(mediaKeys.detail(id), item);
       void queryClient.invalidateQueries({ queryKey: mediaKeys.all });
+      // Renaming an item changes what matches a search — including "did this
+      // still match at all", so drop cached results rather than patching them.
+      void queryClient.invalidateQueries({ queryKey: searchKeys.all });
     },
   });
 }
@@ -221,14 +229,19 @@ export function useUploadMedia() {
     mutationFn: async (input: UploadInput & { onProgress?: (percent: number) => void }) => {
       const { file, title, description, tags, onProgress } = input;
 
-      const start = await api.post<UploadStartResult>('/media/upload/start', {
-        filename: file.name,
-        mimeType: file.type || 'application/octet-stream',
-        size: file.size,
-        title,
-        description,
-        tags,
-      });
+      const [start, duration] = await Promise.all([
+        api.post<UploadStartResult>('/media/upload/start', {
+          filename: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          size: file.size,
+          title,
+          description,
+          tags,
+        }),
+        // A file's duration only exists in the browser (the bytes never reach
+        // the API), so the metadata probe rides along with the start call.
+        readMediaDuration(file),
+      ]);
 
       await putToStorage(start.data.uploadUrl, file, onProgress);
 
@@ -237,6 +250,7 @@ export function useUploadMedia() {
         filename: file.name,
         mimeType: file.type || 'application/octet-stream',
         size: file.size,
+        duration,
       });
 
       return confirm.data;
