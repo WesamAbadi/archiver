@@ -159,3 +159,24 @@ export interface SearchSuggestion {
   value: string;
   kind: 'title' | 'tag';
 }
+
+// ---------------------------------------------------------------------------
+// App settings (mirrors backend/src/services/settings.ts)
+// ---------------------------------------------------------------------------
+
+/** Which service runs transcriptions. Mirrors the `transcription_provider` enum. */
+export type TranscriptionProvider = 'GROQ' | 'GOOGLE';
+
+export interface AppSettings {
+  provider: TranscriptionProvider;
+  model: string;
+  /** True when nothing has been saved yet, so the UI is showing the defaults. */
+  isDefault: boolean;
+}
+
+export interface AppSettingsResponse extends AppSettings {
+  /** Per-provider fallback model, supplied by the server so the UI never hardcodes one. */
+  defaultModels: Record<TranscriptionProvider, string>;
+  /** Which providers actually have credentials — a job fails without them. */
+  available: Record<TranscriptionProvider, boolean>;
+}

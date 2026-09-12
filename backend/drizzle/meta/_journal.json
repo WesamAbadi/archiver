@@ -29,6 +29,13 @@
       "when": 1789246953714,
       "tag": "0003_striped_turbo",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789248367353,
+      "tag": "0004_soft_darkhawk",
+      "breakpoints": true
     }
   ]
 }

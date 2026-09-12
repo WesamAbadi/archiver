@@ -19,6 +19,7 @@ import { authRoutes } from '../src/routes/auth';
 import { mediaRoutes } from '../src/routes/media';
 import { captionRoutes } from '../src/routes/captions';
 import { searchRoutes } from '../src/routes/search';
+import { settingsRoutes } from '../src/routes/settings';
 
 // The request logger would print every request below; keep the output readable.
 beforeAll(() => vi.spyOn(console, 'log').mockImplementation(() => {}));
@@ -87,6 +88,7 @@ function guardedApp(db: unknown) {
   app.route('/api/media', mediaRoutes);
   app.route('/api/media', captionRoutes);
   app.route('/api/search', searchRoutes);
+  app.route('/api/settings', settingsRoutes);
   return app;
 }
 
@@ -125,6 +127,8 @@ describe('every protected route refuses an unauthenticated request', () => {
     ['DELETE', '/api/media/media-1/captions/caption-1'],
     ['GET', '/api/search?q=anything'],
     ['GET', '/api/search/suggestions?q=anything'],
+    ['GET', '/api/settings'],
+    ['PUT', '/api/settings'],
   ];
 
   for (const [method, path] of PROTECTED) {

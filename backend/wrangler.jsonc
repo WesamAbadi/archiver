@@ -76,8 +76,9 @@
   ],
 
   // Non-secret env vars (committed). Secrets go via `npx wrangler secret put <NAME>`:
-  //   ADMIN_PASSWORD, GROQ_API_KEY, R2_ACCOUNT_ID,
+  //   ADMIN_PASSWORD, GROQ_API_KEY, GEMINI_API_KEY, R2_ACCOUNT_ID,
   //   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   (full reference: .env.example)
+  // GEMINI_API_KEY is optional: it is only needed to use the Google provider.
   // ADMIN_USERNAME is optional here — the admin login defaults to "admin".
   "vars": {
     "R2_BUCKET_NAME": "archivedrop-media",

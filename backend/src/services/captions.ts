@@ -26,7 +26,7 @@ import {
   type CaptionJobStatus,
 } from '../db/schema';
 import { createId } from '../lib/id';
-import type { GroqVerboseResponse } from './groq';
+import type { TranscriptionResult, TranscriptionSegment } from './transcription';
 
 export const MAX_ATTEMPTS = 3;
 /** Jobs older than this in PROCESSING are considered stuck. */
@@ -116,6 +116,10 @@ export interface ClaimedJob {
   mediaItemId: string;
   userId: string;
   objectKey: string;
+  /** Passed to the provider: Google maps it, and refuses types it cannot read. */
+  mimeType: string;
+  /** Bytes, so Google can reject an oversized file before reading it. */
+  size: number;
   language?: string;
 }
 
@@ -155,15 +159,17 @@ export async function claimJob(
     mediaItemId: job.mediaItemId,
     userId: job.userId,
     objectKey: file.filename,
+    mimeType: file.mimeType,
+    size: Number(file.size),
     language: undefined,
   };
 }
 
-/** Persist Whisper output: one caption row + its segments. Replaces prior auto captions. */
+/** Persist a provider's transcript: one caption row + its segments. Replaces prior auto captions. */
 export async function saveTranscription(
   db: DB,
   mediaItemId: string,
-  result: GroqVerboseResponse,
+  result: TranscriptionResult,
 ): Promise<number> {
   const segments = normalizeSegments(result.segments ?? []);
   const language = result.language && result.language !== '' ? result.language : 'auto';
@@ -339,11 +345,14 @@ export interface NormalizedSegment {
 }
 
 /**
- * Sanity-pass Whisper segments: drop empties, enforce ordering/positivity.
- * Whisper timestamps are real — this is a light guardrail, not the old
- * 100-line hallucination-repair heuristics.
+ * Sanity-pass provider segments: drop empties, enforce ordering/positivity.
+ *
+ * This is a light guardrail, not the old 100-line hallucination-repair
+ * heuristics — but note it now covers BOTH providers, and Gemini's estimated
+ * timestamps do occasionally arrive overlapping or negative, where Whisper's
+ * decoded ones essentially never do.
  */
-export function normalizeSegments(segments: GroqVerboseResponse['segments']): NormalizedSegment[] {
+export function normalizeSegments(segments: TranscriptionSegment[] | undefined): NormalizedSegment[] {
   if (!Array.isArray(segments)) return [];
 
   const out: NormalizedSegment[] = [];
@@ -363,7 +372,7 @@ export function normalizeSegments(segments: GroqVerboseResponse['segments']): No
       startTime: Number(start.toFixed(3)),
       endTime: Number(end.toFixed(3)),
       text: seg.text.trim(),
-      confidence: typeof seg.no_speech_prob === 'number' ? 1 - seg.no_speech_prob : undefined,
+      confidence: typeof seg.noSpeechProb === 'number' ? 1 - seg.noSpeechProb : undefined,
     });
 
     lastEnd = end;

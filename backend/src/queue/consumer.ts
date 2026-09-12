@@ -2,9 +2,14 @@
  * Queue consumer + cron handlers.
  *
  * queue(): per-message ack/retry so one bad job never re-delivers a whole
- * batch (explicit ack semantics — see Queues docs). Groq 'transient' errors
+ * batch (explicit ack semantics — see Queues docs). Provider 'transient' errors
  * -> msg.retry({delaySeconds}) with exponential backoff; 'permanent' errors
  * -> recorded failure (job FAILED after attempts), message acked.
+ *
+ * Which provider runs is a setting, read once per batch (see services/settings),
+ * so changing it in the UI affects the next job rather than requiring a deploy.
+ * A file already mid-retry keeps whatever it gets on its next attempt — jobs
+ * store no provider, deliberately: there is one current answer, not a history.
  *
  * scheduled(): two cron duties, kept cheap:
  * - reclaim stuck PROCESSING jobs back to QUEUED
@@ -15,16 +20,18 @@ import type { CaptionJobMessage } from './messages';
 import { captionJobMessageSchema } from './messages';
 import { createDB, type DB } from '../db/client';
 import * as captionService from '../services/captions';
-import { transcribe, GroqError } from '../services/groq';
-import { presignedGetUrl } from '../services/r2';
-
-const PRESIGN_TTL_SECONDS = 600; // 10 min — Groq fetches soon after we sign
+import { getAppSettings, type ResolvedAppSettings } from '../services/settings';
+import { transcribe, TranscriptionError } from '../services/transcription';
 
 export async function handleQueueBatch(
   batch: MessageBatch<CaptionJobMessage>,
   env: Env,
 ): Promise<void> {
   const db = await createDB(env);
+
+  // One read for the whole batch. Failing here (rather than per job) is
+  // deliberate: we cannot pick a provider, so nothing in this batch can run.
+  const settings = await getAppSettings(db);
 
   for (const message of batch.messages) {
     const parsed = captionJobMessageSchema.safeParse(message.body);
@@ -37,11 +44,17 @@ export async function handleQueueBatch(
     const msg = parsed.data;
 
     try {
-      await processJob(db, env, msg);
+      await processJob(db, env, msg, settings);
       message.ack();
     } catch (err) {
-      const isGroq = err instanceof GroqError;
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      // Name the provider in the recorded message: "transcription failed" after
+      // switching providers is ambiguous exactly when it matters most.
+      const errorMessage =
+        err instanceof TranscriptionError
+          ? `[${err.provider}] ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
       console.error(`[queue] job ${msg.jobId} failed:`, errorMessage);
 
       const outcome = await captionService
@@ -65,8 +78,6 @@ export async function handleQueueBatch(
         // Permanently failed after max attempts — stop redelivering.
         message.ack();
       }
-
-      void isGroq;
     }
   }
 }
@@ -75,6 +86,7 @@ async function processJob(
   db: DB,
   env: Env,
   msg: CaptionJobMessage,
+  settings: ResolvedAppSettings,
 ): Promise<void> {
   const claimed = await captionService.claimJob(db, msg.jobId);
   if (!claimed) {
@@ -83,12 +95,17 @@ async function processJob(
     return;
   }
 
-  // Fresh presigned URL per attempt — never a stale one.
-  const audioUrl = await presignedGetUrl(env, claimed.objectKey, PRESIGN_TTL_SECONDS);
-
+  // The dispatcher owns provider specifics: Groq gets a fresh presigned URL
+  // (never a stale one), Google gets the bytes out of R2.
   const result = await transcribe(
-    { GROQ_API_KEY: env.GROQ_API_KEY, GROQ_MODEL: env.GROQ_MODEL },
-    { audioUrl, language: claimed.language },
+    env,
+    { provider: settings.provider, model: settings.model },
+    {
+      objectKey: claimed.objectKey,
+      mimeType: claimed.mimeType,
+      size: claimed.size,
+      language: claimed.language,
+    },
   );
 
   const segmentCount = await captionService.saveTranscription(db, claimed.mediaItemId, result);

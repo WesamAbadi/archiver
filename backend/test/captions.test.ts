@@ -5,7 +5,7 @@ import {
   isTranscribable,
   jobStatusCounts,
 } from '../src/services/captions';
-import { GroqError, classify_ } from '../src/services/groq';
+import { TranscriptionError, classifyHttpStatus } from '../src/services/transcription';
 import { captionJobMessageSchema } from '../src/queue/messages';
 
 describe('normalizeSegments (Whisper output guardrail)', () => {
@@ -51,7 +51,7 @@ describe('normalizeSegments (Whisper output guardrail)', () => {
   });
 
   it('derives confidence from no_speech_prob', () => {
-    const out = normalizeSegments([{ start: 0, end: 1, text: 'x', no_speech_prob: 0.2 }]);
+    const out = normalizeSegments([{ start: 0, end: 1, text: 'x', noSpeechProb: 0.2 }]);
     expect(out[0]?.confidence).toBeCloseTo(0.8);
   });
 
@@ -84,27 +84,28 @@ describe('isTranscribable', () => {
   });
 });
 
-describe('GroqError classification', () => {
+describe('HTTP status classification (shared by both providers)', () => {
   it('classifies retryable statuses as transient', () => {
-    expect(classify_(408)).toBe('transient');
-    expect(classify_(429)).toBe('transient');
-    expect(classify_(500)).toBe('transient');
-    expect(classify_(503)).toBe('transient');
+    expect(classifyHttpStatus(408)).toBe('transient');
+    expect(classifyHttpStatus(429)).toBe('transient');
+    expect(classifyHttpStatus(500)).toBe('transient');
+    expect(classifyHttpStatus(503)).toBe('transient');
   });
 
   it('classifies client errors as permanent', () => {
-    expect(classify_(400)).toBe('permanent');
-    expect(classify_(401)).toBe('permanent');
-    expect(classify_(403)).toBe('permanent');
-    expect(classify_(404)).toBe('permanent');
-    expect(classify_(413)).toBe('permanent');
+    expect(classifyHttpStatus(400)).toBe('permanent');
+    expect(classifyHttpStatus(401)).toBe('permanent');
+    expect(classifyHttpStatus(403)).toBe('permanent');
+    expect(classifyHttpStatus(404)).toBe('permanent');
+    expect(classifyHttpStatus(413)).toBe('permanent');
   });
 
-  it('GroqError carries kind and status', () => {
-    const err = new GroqError('boom', 'transient', 429);
+  it('TranscriptionError carries kind, provider and status', () => {
+    const err = new TranscriptionError('boom', 'transient', 'GROQ', 429);
     expect(err.kind).toBe('transient');
+    expect(err.provider).toBe('GROQ');
     expect(err.status).toBe(429);
-    expect(err.name).toBe('GroqError');
+    expect(err.name).toBe('TranscriptionError');
   });
 });
 

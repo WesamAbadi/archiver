@@ -7,6 +7,7 @@ import { API_ORIGIN } from '@/lib/env';
 import { useLogout, useSession } from '@/features/auth/hooks';
 import { useQuota } from '@/features/media/api';
 import { toast } from '@/components/ui/toast';
+import { TranscriptionSection } from './TranscriptionSettings';
 
 export function SettingsPage() {
   const session = useSession();
@@ -27,7 +28,7 @@ export function SettingsPage() {
       <header className="mb-8">
         <h1 className="font-display text-3xl text-ink">Settings</h1>
         <p className="mt-2 text-sm text-ink-muted">
-          Storage, session and connection details for this archive.
+          Transcription, storage, session and connection details for this archive.
         </p>
       </header>
 
@@ -72,6 +73,9 @@ export function SettingsPage() {
             )
           )}
         </section>
+
+        {/* ── Transcription ─────────────────────────────────────────────── */}
+        <TranscriptionSection />
 
         {/* ── Session ───────────────────────────────────────────────────── */}
         <section className="rounded-lg border border-border bg-surface p-6">

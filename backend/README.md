@@ -12,11 +12,13 @@ src/
   db/               Drizzle client (Hyperdrive) + schema
   lib/id.ts         nanoid ids
   queue/            messages.ts (typed contract) + consumer.ts (ack/retry + cron)
-  routes/           auth.ts, media.ts, captions.ts, search.ts
-  services/         r2.ts (presign), users.ts, media.ts, captions.ts, groq.ts, search.ts
+  routes/           auth.ts, media.ts, captions.ts, search.ts, settings.ts
+  services/         r2.ts (presign), users.ts, media.ts, captions.ts, search.ts, settings.ts
+  services/transcription/   types.ts (contract), groq.ts, google.ts, index.ts (dispatcher)
 drizzle/            generated migrations (0002's search prelude is hand-written)
 scripts/            verify + dry-run tooling (see "Verifying" below)
-test/               vitest: units (r2, captions, search, throttle) + security.test.ts
+test/               vitest: units (r2, captions, search, settings, transcription, throttle)
+                    + security.test.ts
 ```
 
 ## Setup
@@ -48,7 +50,7 @@ pnpm dev                    # wrangler dev on http://localhost:8787
 | `ADMIN_USERNAME` | `wrangler.jsonc` vars (optional) | `.dev.vars` | defaults to `admin` |
 | `ADMIN_PASSWORD` | `wrangler secret put` | `.dev.vars` | the single admin password |
 | `GROQ_API_KEY` | `wrangler secret put` | `.dev.vars` | console.groq.com → API Keys |
-| `GROQ_MODEL` (optional) | `wrangler secret put` | `.dev.vars` | default `whisper-large-v3-turbo` |
+| `GEMINI_API_KEY` | `wrangler secret put` | `.dev.vars` | aistudio.google.com → API key (only needed to use the Google provider) |
 | `R2_ACCOUNT_ID` | `wrangler secret put` | `.dev.vars` | Cloudflare account id |
 | `R2_ACCESS_KEY_ID` | `wrangler secret put` | `.dev.vars` | R2 S3 API token (read+write) |
 | `R2_SECRET_ACCESS_KEY` | `wrangler secret put` | `.dev.vars` | R2 S3 API token secret |
@@ -84,14 +86,21 @@ bounding password guesses on a single known username.
 
 ## Tests
 
-`pnpm test` runs ~115 tests. `test/security.test.ts` is the abuse suite: it
-drives the real routers and the real `requireAuth` with a *faked* database whose
-only job is to throw if anything queries it before authentication. That is what
-makes "every protected route returns 401 without touching the database" a
-checked property rather than a claim. It also covers login payload validation,
-the throttle (lock, count, clear), and the CORS allowlist — including a guard
-that `PUT` stays advertised, since its absence broke the caption editor in
-browsers while every curl-based test passed.
+`pnpm test` runs ~167 tests across 8 files. `test/security.test.ts` is the abuse
+suite: it drives the real routers and the real `requireAuth` with a *faked*
+database whose only job is to throw if anything queries it before
+authentication. That is what makes "every protected route returns 401 without
+touching the database" a checked property rather than a claim. It also covers
+login payload validation, the throttle (lock, count, clear), and the CORS
+allowlist — including a guard that `PUT` stays advertised, since its absence
+broke the caption editor in browsers while every curl-based test passed.
+
+`test/transcription.test.ts` drives both providers with `fetch` stubbed and
+asserts the outbound request itself — model, URL, auth, and how the bytes reach
+the provider — because a wrong field name still returns 200 from a mocked fetch
+and would only surface as a failing job in a queue where nobody is watching.
+`test/settings.test.ts` covers the settings service and the `/api/settings`
+validation, from the outside, through the real router.
 
 ## Cloudflare setup (production)
 
@@ -224,12 +233,17 @@ renders `—` — because a cosmetic field must never be able to fail an upload.
 ```
 upload confirm ──send──> CAPTION_QUEUE ──> queue() consumer
                                              ├─ claim job (atomic, DB state)
-                                             ├─ presign R2 GET (10 min)
-                                             ├─ POST api.groq.com/.../audio/transcriptions
-                                             │    model=whisper-large-v3-turbo
-                                             │    url=<presigned R2 URL>   <- Groq fetches, no 25MB limit
-                                             │    response_format=verbose_json
-                                             │    timestamp_granularities[]=segment
+                                             ├─ read provider + model from app_settings (once per batch)
+                                             ├─ GROQ: presign R2 GET (10 min), then
+                                             │    POST api.groq.com/.../audio/transcriptions
+                                             │      model=whisper-large-v3-turbo
+                                             │      url=<presigned R2 URL>  <- Groq fetches, no 25MB limit
+                                             │      response_format=verbose_json
+                                             │      timestamp_granularities[]=segment
+                                             └─ GOOGLE: read the object from R2, then
+                                                  POST .../models/<model>:generateContent
+                                                    inlineData=<base64> (20MB request cap, so 14MB audio)
+                                                    responseSchema=JSON (timed segments)
                                              ├─ normalize segments -> caption + caption_segments
                                              ├─ COMPLETED (ack)                          
                                              └─ failure: transient -> retry w/ backoff (1,4,9 min, cap 1h)
@@ -242,7 +256,37 @@ Reliability properties (none of which the old system had):
 - Attempt counts + state live in Postgres (survive deploys), not memory
 - Double-delivery safe: atomic claim means redelivered jobs no-op
 - Stuck PROCESSING jobs auto-reclaimed after 15 min
-- `GROQ_API_KEY` never exposed to clients; Groq errors never leak verbatim
+- API keys never exposed to clients; provider errors never leak verbatim
+
+## Transcription providers
+
+Which service transcribes an upload is a **runtime setting**, not an env var:
+`app_settings` holds one row (provider + model id), written from Settings and
+read once per queue batch. Adding a key with `wrangler secret put` therefore
+does not require redeploying, and switching provider takes effect on the next
+job rather than on the next deploy.
+
+| Provider | Timing | Limits |
+|---|---|---|
+| **Groq · Whisper** (default) | Real decoder timestamps | Groq fetches a presigned URL, so file size is bounded by the plan, not a request body |
+| **Google · Gemini** | Estimated by the model | 14 MB inline (20 MB request cap minus base64 overhead); only the containers in `GEMINI_SUPPORTED_MIME_TYPES` |
+
+**The trade is real and is not hidden.** Groq returns times Whisper's decoder
+measured; Gemini returns times it estimates when asked. Lyric highlighting, the
+`?t=` deep links and transcript search all rest on those numbers, so Google is a
+quality trade rather than a preference — and it is exactly the unreliability
+that had the old Gemini pipeline replaced.
+
+Google is also stricter about containers and size, and it cannot fetch a URL, so
+the Worker reads the object from R2 and inlines it as base64. Both refusals are
+`permanent` errors: they fail fast with a message naming the supported types or
+the size limit, and the message suggests switching that file to Groq, rather
+than burning retries into the DLQ.
+
+Server-side details live in `src/services/transcription/` — `types.ts` (the
+provider-neutral contract and error classification), `groq.ts`, `google.ts`, and
+`index.ts` (the dispatcher). The queue consumer and the caption service never
+learn which provider ran.
 
 ## Auth model (single admin)
 
@@ -318,3 +362,5 @@ which the UI turns into a `?t=` deep link into the player.
 | DELETE | `/api/media/:id/captions/:captionId` | delete captions |
 | GET | `/api/search` | `?q=&page=&limit=` — titles, tags, descriptions, transcripts |
 | GET | `/api/search/suggestions` | `?q=&limit=` — typeahead titles + tags |
+| GET | `/api/settings` | current provider + model, per-provider defaults, key availability |
+| PUT | `/api/settings` | set `{ provider, model? }` — omit `model` to take the provider default |

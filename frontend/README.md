@@ -58,7 +58,7 @@ src/
     search/       SearchPage + its queries (results keyed by term, not by page)
     watch/        WatchPage, TranscriptPanel
     editor/       CaptionEditorPage
-    settings/     SettingsPage
+    settings/     SettingsPage, TranscriptionSettings (provider + model), api.ts
 ```
 
 Three conventions worth keeping:

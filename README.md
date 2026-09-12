@@ -15,8 +15,8 @@ browser ──PUT file──────────────► R2 bucket   
    │                                 ▲
    │ 1. start  2. confirm            │ presigned URL
    ▼                                 │
-Worker (Hono) ──enqueue──► Cloudflare Queue ──► Groq Whisper
-   │                                              │ real segment timestamps
+Worker (Hono) ──enqueue──► Cloudflare Queue ──► Groq Whisper │ Google Gemini
+   │                                              │ segments + timestamps
    ▼                                              ▼
 Neon Postgres (via Hyperdrive) ◄────────── transcript + segments
 ```
@@ -27,6 +27,9 @@ Neon Postgres (via Hyperdrive) ◄────────── transcript + se
   Queues, with retries, a DLQ and a cron sweep that re-sends dropped messages.
 - **Search runs in Postgres.** Arabic normalization lives in the database and is
   applied to both the indexed columns and the query, so they can't disagree.
+- **The transcription provider is a setting, not a deploy.** Settings →
+  Transcription chooses between Groq Whisper (default — real decoded timestamps)
+  and Google Gemini, and the model id for either.
 
 ## Stack
 
@@ -36,7 +39,7 @@ Neon Postgres (via Hyperdrive) ◄────────── transcript + se
 | `frontend/` | React 19 + Vite + Tailwind 4 on Cloudflare Pages |
 | Database | Neon Postgres, reached through Hyperdrive |
 | Storage | Cloudflare R2 (private bucket, presigned URLs) |
-| Transcription | Groq `whisper-large-v3-turbo` |
+| Transcription | Groq Whisper (default) or Google Gemini — provider and model chosen in Settings |
 
 There is deliberately **no root package manifest**: the Worker and the Pages site
 are independent deployables with separate lockfiles. Install and run each one

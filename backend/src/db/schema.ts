@@ -101,6 +101,9 @@ export const captionJobStatusEnum = pgEnum('caption_job_status', [
   'CANCELLED',
 ]);
 
+/** Which speech-to-text backend runs transcriptions. See services/transcription/. */
+export const transcriptionProviderEnum = pgEnum('transcription_provider', ['GROQ', 'GOOGLE']);
+
 // ---------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------
@@ -227,6 +230,31 @@ export const mediaFiles = pgTable(
   },
   (t) => [index('media_files_media_item_idx').on(t.mediaItemId)],
 );
+
+// ---------------------------------------------------------------------------
+// App settings
+// ---------------------------------------------------------------------------
+
+/**
+ * Application configuration, as opposed to anything about the owner.
+ *
+ * Exactly ONE row (fixed id, see services/settings.ts). Deliberately not columns
+ * on `users`: that table is the owner's identity, and mixing "who this is" with
+ * "how the app is configured" is how a settings screen ends up needing the user
+ * object to render.
+ */
+export const appSettings = pgTable('app_settings', {
+  id: varchar('id', { length: 32 }).primaryKey(),
+  transcriptionProvider: transcriptionProviderEnum('transcription_provider')
+    .notNull()
+    .default('GROQ'),
+  /** Provider-specific model id. Validated in the API, not by an enum — model
+   *  ids appear faster than migrations would. */
+  transcriptionModel: varchar('transcription_model', { length: 64 })
+    .notNull()
+    .default('whisper-large-v3-turbo'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 // ---------------------------------------------------------------------------
 // Captions
@@ -394,6 +422,9 @@ export type CaptionJob = typeof captionJobs.$inferSelect;
 export type NewCaptionJob = typeof captionJobs.$inferInsert;
 export type AdminSession = typeof adminSessions.$inferSelect;
 export type NewAdminSession = typeof adminSessions.$inferInsert;
+
+export type AppSettings = typeof appSettings.$inferSelect;
+export type TranscriptionProvider = (typeof transcriptionProviderEnum.enumValues)[number];
 
 export type Platform = (typeof platformEnum.enumValues)[number];
 export type CaptionStatus = (typeof captionStatusEnum.enumValues)[number];

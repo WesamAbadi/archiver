@@ -2,12 +2,11 @@
  * Shared env/bindings type for the Worker.
  */
 import type { DBEnv, DB } from './db/client';
-import type { R2Env } from './services/r2';
 import type { AuthEnv } from './auth';
-import type { GroqEnv } from './services/groq';
+import type { TranscriptionEnv } from './services/transcription';
 import type { CaptionJobMessage } from './queue/messages';
 
-export interface Env extends DBEnv, R2Env, AuthEnv, GroqEnv {
+export interface Env extends DBEnv, AuthEnv, TranscriptionEnv {
   /** Comma-separated list of allowed CORS origins (e.g. the Pages URL). */
   CORS_ORIGINS?: string;
   /** Cloudflare Queues producer binding for caption jobs. */
