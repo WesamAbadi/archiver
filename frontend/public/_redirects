@@ -1,3 +1,0 @@
-# Cloudflare Pages SPA fallback: serve index.html for any unmatched route so
-# client-side routing (e.g. /login, /watch/:id) works on direct load and refresh.
-/*    /index.html   200

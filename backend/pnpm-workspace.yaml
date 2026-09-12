@@ -1,5 +1,16 @@
-ignoredBuiltDependencies:
-  - ffmpeg-static
-  - msgpackr-extract
-  - protobufjs
-  - sharp
+# pnpm 11 build-script approvals.
+#
+# pnpm blocks dependency install scripts by default and, when it does, it writes
+# this file itself — with the literal placeholder values
+# `set this to true or false`. Those are not booleans, so leaving them in place
+# makes the next `pnpm install` re-prompt (or fail with ERR_PNPM_IGNORED_BUILDS).
+#
+# Both of these genuinely need their build step to run Wrangler locally:
+#   workerd  — the Cloudflare Workers runtime used by `wrangler dev` (miniflare)
+#   esbuild  — what Wrangler bundles the Worker with
+#
+# No `packages:` key on purpose: this is a single-package project, so this file
+# only carries settings.
+allowBuilds:
+  esbuild: true
+  workerd: true

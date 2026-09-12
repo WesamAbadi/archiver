@@ -1,238 +1,130 @@
-import axios from 'axios'
-import { authService } from './auth'
-import { API_BASE_URL } from './apiBase'
+import { API_BASE_URL } from './env';
+import type { Pagination } from './types';
+import { clearSession, getToken } from '@/features/auth/session';
 
-export const api = axios.create({
-  baseURL: API_BASE_URL,
-})
+/**
+ * The one way this app talks to the API.
+ *
+ * The old frontend had three competing conventions (a shared axios instance, raw
+ * `axios('/api/…')` calls that skipped auth headers, and a `fetch` in the auth
+ * service), which is how `api/auth` vs `/api/auth` bugs creep in. Everything
+ * goes through here, so auth headers, error shape and 401 handling can't drift.
+ */
 
-// Request interceptor to add auth token
-api.interceptors.request.use(async (config) => {
+export class ApiError extends Error {
+  readonly status: number;
+  readonly payload: unknown;
+
+  constructor(message: string, status: number, payload?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.payload = payload;
+  }
+
+  /** status 0 means the request never reached the server. */
+  get isNetworkError(): boolean {
+    return this.status === 0;
+  }
+}
+
+export interface ApiEnvelope<T> {
+  success: boolean;
+  data: T;
+  pagination?: Pagination;
+  message?: string;
+}
+
+type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+
+interface RequestOptions {
+  method?: Method;
+  body?: unknown;
+  signal?: AbortSignal;
+  /**
+   * false = send no Authorization header and don't clear the session on a 401.
+   * Only the login call uses this.
+   */
+  authenticated?: boolean;
+}
+
+type NoBodyOptions = Omit<RequestOptions, 'method' | 'body'>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+export async function apiRequest<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<ApiEnvelope<T>> {
+  const { method = 'GET', body, signal, authenticated = true } = options;
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+
+  if (authenticated) {
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+
+  let response: Response;
   try {
-    const token = authService.getToken()
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
+    });
   } catch (error) {
-    console.error('Failed to get auth token:', error)
+    // Let react-query see aborts as aborts (it ignores them).
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new ApiError('Could not reach the server. Check your connection and try again.', 0);
   }
-  return config
-})
 
-// Response interceptor for error handling
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      // Clear invalid token and redirect to login
-      authService.signOut()
-      if (window.location.pathname !== '/login') {
-        console.log('API 401 error, redirecting to login')
-        window.location.href = '/login'
-      }
+  const text = await response.text();
+  let payload: unknown = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = null;
     }
-    return Promise.reject(error)
   }
-)
 
-export interface APIResponse<T = any> {
-  success: boolean
-  data?: T
-  error?: string
-  message?: string
-}
+  if (!response.ok) {
+    const message =
+      isRecord(payload) && typeof payload.error === 'string'
+        ? payload.error
+        : `Request failed (${response.status})`;
 
-export interface PaginatedResponse<T> extends APIResponse<T[]> {
-  pagination: {
-    page: number
-    limit: number
-    total: number
-    totalPages: number
-    hasNext: boolean
-    hasPrev: boolean
+    // A revoked or expired session must not leave the UI believing it's signed
+    // in — clearing here funnels every caller into the same signed-out state.
+    if (response.status === 401 && authenticated) clearSession();
+
+    throw new ApiError(message, response.status, payload);
   }
-}
 
-export interface MediaItem {
-  id: string
-  userId: string
-  originalUrl: string
-  platform: string
-  title: string
-  description?: string
-  // Flattened metadata fields from new schema
-  duration?: number
-  size: number
-  format: string
-  resolution?: string
-  thumbnailUrl?: string
-  originalAuthor?: string
-  originalTitle?: string
-  originalDescription?: string
-  publishedAt?: string
-  hashtags?: string[]
-  aiSummary?: string
-  aiKeywords?: string[]
-  aiCaptions?: string
-  aiGeneratedAt?: string
-  files: {
-    id: string
-    filename: string
-    originalName: string
-    mimeType: string
-    size: number
-    downloadUrl: string
-    isOriginal: boolean
-    format: string
-  }[]
-  visibility: 'PRIVATE' | 'PUBLIC'
-  tags: string[]
-  createdAt: string
-  updatedAt: string
-  downloadStatus: 'PENDING' | 'DOWNLOADING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
-  publicId?: string
-  // Analytics fields
-  viewCount: number
-  likeCount: number
-  commentCount: number
-  // Relations
-  user?: {
-    id: string
-    displayName?: string
-    photoURL?: string
+  if (!isRecord(payload)) {
+    throw new ApiError('The server returned an unexpected response.', response.status, payload);
   }
-  // Search result fields
-  caption_match?: string
+
+  return payload as unknown as ApiEnvelope<T>;
 }
 
-export interface DownloadJob {
-  id: string
-  userId: string
-  url: string
-  platform: string
-  status: 'PENDING' | 'DOWNLOADING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
-  progress: number
-  error?: string
-  mediaItemId?: string
-  createdAt: string
-}
+export const api = {
+  get: <T>(path: string, options: NoBodyOptions = {}) =>
+    apiRequest<T>(path, { ...options, method: 'GET' }),
 
-// Auth API
-export const authAPI = {
-  googleLogin: (token: string) => api.post('/auth/google', { token }),
-  getMe: () => api.get('/auth/me'),
-  updatePreferences: (preferences: any) => api.patch('/auth/preferences', preferences),
-  updateProfile: (data: any) => api.patch('/auth/profile', data),
-}
+  post: <T>(path: string, body?: unknown, options: NoBodyOptions = {}) =>
+    apiRequest<T>(path, { ...options, method: 'POST', body }),
 
-// Media API
-export const mediaAPI = {
-  submitUrl: (data: { url: string; visibility?: string; tags?: string[] }) => 
-    api.post('/media/submit', data),
-  
-  uploadFile: (formData: FormData) => 
-    api.post<APIResponse<MediaItem>>('/media/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    }),
-  
-  getJobStatus: (jobId: string) => 
-    api.get(`/media/job/${jobId}`),
-  
-  getMediaItem: (id: string) => 
-    api.get(`/media/${id}`),
-  
-  updateMediaItem: (id: string, data: any) => 
-    api.patch(`/media/${id}`, data),
-  
-  deleteMediaItem: (id: string) => 
-    api.delete(`/media/${id}`),
-  
-  generateMetadata: (id: string) => 
-    api.post<APIResponse<any>>(`/media/${id}/generate-metadata`),
-}
+  patch: <T>(path: string, body?: unknown, options: NoBodyOptions = {}) =>
+    apiRequest<T>(path, { ...options, method: 'PATCH', body }),
 
-// Archive API (Personal)
-export const archiveAPI = {
-  getArchive: (params?: { 
-    page?: number; 
-    limit?: number; 
-    sortBy?: string; 
-    sortOrder?: string; 
-  }) => api.get('/archive', { params }),
-  
-  getStats: () => api.get('/archive/stats'),
-}
+  put: <T>(path: string, body?: unknown, options: NoBodyOptions = {}) =>
+    apiRequest<T>(path, { ...options, method: 'PUT', body }),
 
-// Public Content API
-export const publicAPI = {
-  // Get homepage feed
-  getFeed: (params?: { 
-    page?: number; 
-    limit?: number; 
-    type?: 'all' | 'video' | 'audio' | 'image';
-    sortBy?: string;
-    sortOrder?: 'asc' | 'desc';
-    tag?: string;
-  }) => api.get('/archive/feed', { params }),
-  
-  // Get public media items with sorting
-  getPublicMedia: (params?: {
-    page?: number;
-    limit?: number;
-    sortBy?: string;
-    sortOrder?: 'asc' | 'desc';
-    tag?: string;
-    filter?: string;
-  }) => api.get('/media/public', { params }),
-  
-  // Get trending content
-  getTrending: (params?: { 
-    limit?: number; 
-    type?: 'all' | 'video' | 'audio' | 'image';
-  }) => api.get('/archive/trending', { params }),
-  
-  // Get public media item with comments
-  getMediaItem: (id: string) => 
-    api.get(`/archive/media/${id}`),
-  
-  // Like/unlike media
-  toggleLike: (id: string) => 
-    api.post(`/archive/media/${id}/like`),
-  
-  // Add comment
-  addComment: (id: string, content: string) => 
-    api.post(`/archive/media/${id}/comment`, { content }),
-
-  // Get popular tags
-  getPopularTags: (params?: {
-    random?: number;
-  }) => api.get('/media/popular-tags', { params }),
-}
-
-// User API
-export const userAPI = {
-  getProfile: () => api.get('/user/profile'),
-  updateProfile: (data: any) => api.patch('/user/profile', data),
-  getUsage: () => api.get('/user/usage'),
-}
-
-// Search API
-export const searchAPI = {
-  search: (params: { 
-    q: string;
-    limit?: number;
-    offset?: number;
-    includePrivate?: boolean;
-  }, signal?: AbortSignal) => api.get<SearchResult>('/search', { params, signal }),
-  
-  getSuggestions: (params: {
-    q: string;
-    limit?: number;
-  }, signal?: AbortSignal) => api.get<string[]>('/search/suggestions', { params, signal }),
-}
-
-export interface SearchResult {
-  items: MediaItem[];
-  total: number;
-  hasMore: boolean;
-} 
+  delete: <T>(path: string, options: NoBodyOptions = {}) =>
+    apiRequest<T>(path, { ...options, method: 'DELETE' }),
+};

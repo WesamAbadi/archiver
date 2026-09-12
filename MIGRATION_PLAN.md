@@ -2,7 +2,7 @@
 
 > Status tracker for the full rewrite of ArchiveDrop onto Cloudflare (Workers + Pages + R2) with Groq Whisper transcription.
 > Last updated: 2026-09-12 — **Phases 1, 2, 4 and 5 complete and deployed** (Worker `archivedrop-api` + Pages `archivedrop` live in account `cd44a079…`; Hyperdrive, both queues and all five Worker secrets are set). Auth is single-admin login — **no OAuth, no accounts**.
-> **Where it stands:** Phases 1–2 (backend), **Phase 4 (frontend)** and **Phase 5 (search)** are complete, deployed and verified end-to-end against real storage *and real Arabic audio*. The frontend was rebuilt fresh in `frontend-v2/` rather than patched, and is live on Cloudflare Pages. Remaining work is Phase 6 (hardening, cutover, data migration).
+> **Where it stands:** Phases 1–2 (backend), **Phase 4 (frontend)**, **Phase 5 (search)** and the **Phase 6 cutover** are complete, deployed and verified end-to-end against real storage *and real Arabic audio*. The frontend was rebuilt fresh rather than patched, and is live on Cloudflare Pages. Remaining work is the rest of Phase 6 (hardening).
 >
 > **Verified end-to-end in a real browser**, not just with curl: admin login → library → UI upload (image *and* audio) with progress → auto-enqueued transcription → Groq Whisper returned real timestamps → transcript rendered → caption editor edit + undo + save persisted → playback from a signed R2 URL (3s file, duration decoded, no error). Test data cleaned up; library and DB back to empty.
 >
@@ -35,12 +35,16 @@ Non-goals for v1: URL downloads (yt-dlp), social features (likes/comments/feed/t
 | 3 | Rebuild style | **Fresh rewrite on Hono** | Reuse schema + lessons learned, not old code. Preserve API shape where sensible. |
 | 4 | Feature scope | **Personal archive focus** | Archive, uploads, captions/lyrics, search. Likes/comments/feed **and** public sharing cut entirely (not deferred). |
 | 5 | Transcription | **Groq Whisper** | `verbose_json` response → real `segments[{start, end, text}]` → maps 1:1 into `caption_segments`. Deletes all Gemini timestamp heuristics. |
-| 6 | Naming / branding | **Keep `ArchiveDrop`, no renames** | Product name is already consistent everywhere in code, UI and infra (`archivedrop-api` Worker, `archivedrop-media` bucket, `archivedrop-db` Hyperdrive). Local folder + GitHub repo stay `archiver` — cosmetic only, zero code references. The `-v2` dir suffixes are temporary and become `backend/`/`frontend/` in Phase 6. |
+| 6 | Naming / branding | **Keep `ArchiveDrop`, no renames** | Product name is already consistent everywhere in code, UI and infra (`archivedrop-api` Worker, `archivedrop-media` bucket, `archivedrop-db` Hyperdrive). Local folder + GitHub repo stay `archiver` — cosmetic only, zero code references. The `-v2` dir suffixes were temporary scaffolding and are gone — `backend/` and `frontend/` are now the only copies, and the old Express + React app was deleted (still in git history). |
 | 7 | Auth / accounts | **Single admin, no accounts** | One `ADMIN_USERNAME`/`ADMIN_PASSWORD` login. Google OAuth + session JWTs removed; sessions are opaque tokens in `admin_sessions` (revocable, expiring, SHA-256 stored). `users` keeps exactly one owner row so media/quota stay owner-scoped. No sign-up, no profiles. Engagement columns (`view_count`/`like_count`/`comment_count`) and sharing fields (`visibility`/`public_id`) dropped in migration `0001`. |
 
 ---
 
 ## 3. Analysis — problems found (do not carry these over)
+
+> Paths in this section point at the **deleted** old app. It is no longer in the
+> working tree — check out the commit before the cutover to read it. Kept because
+> the *reasons* are what stop the same mistakes coming back in a rewrite.
 
 ### 3.1 Backend architecture blockers (cannot run on Workers)
 
@@ -144,8 +148,8 @@ Groq Whisper         verbose_json → segments → caption_segments rows
 ## 5. Phased plan
 
 ### Phase 1 — Backend skeleton + storage (foundation) — **complete and deployed**
-- [x] Scaffold Hono project + wrangler config (env bindings: R2, Hyperdrive, secrets) → `backend-v2/`
-- [x] Port Prisma schema → Drizzle (v1 tables only) → `backend-v2/src/db/schema.ts` + generated migration `drizzle/0000_*.sql`
+- [x] Scaffold Hono project + wrangler config (env bindings: R2, Hyperdrive, secrets) → `backend/`
+- [x] Port Prisma schema → Drizzle (v1 tables only) → `backend/src/db/schema.ts` + generated migration `drizzle/0000_*.sql`
 - [x] ~~Google auth on Workers via `jose`~~ → **replaced by single-admin login** (constant-time credential check, both fields SHA-256'd before compare) → `src/auth/index.ts`
 - [x] ~~JWT sessions (HS256)~~ → **replaced by opaque DB sessions**: random 256-bit token, only its SHA-256 stored, expiry enforced in the lookup query, revocable on logout → `src/services/sessions.ts`
 - [x] R2 service: presigned PUT/GET via aws4fetch, delete/head via binding → `src/services/r2.ts`
@@ -161,7 +165,7 @@ Groq Whisper         verbose_json → segments → caption_segments rows
 
 **Phase 1 build layout:**
 ```
-backend-v2/
+backend/
   src/index.ts        Hono app (CORS allowlist from env, error handler, /health)
   src/env.ts          Shared bindings type
   src/auth/           admin credential check + session middleware
@@ -191,7 +195,7 @@ backend-v2/
 - [x] Frontend polls during upload/transcription — `useCaptionStatus`, 4s interval, stops on a terminal state (verified in the browser: a real upload went `QUEUED` → `COMPLETED` with no reload)
 - [ ] (Optional v2) Durable Object WebSocket for push updates
 
-### Phase 4 — Frontend rebuild in `frontend-v2/` — **built and deployed**
+### Phase 4 — Frontend rebuild — **built and deployed**
 
 Decision (supersedes "clean up `frontend/`"): **rebuild fresh** against the v2 API. Patching ~6 interwoven view components that all carried the old architecture would have preserved the problem. Everything below was a checkbox in the old "cleanup" list and is now either fixed structurally or impossible by construction.
 
@@ -233,16 +237,17 @@ Decision (supersedes "clean up `frontend/`"): **rebuild fresh** against the v2 A
 - One more trap worth knowing: Pages caches `index.html`, so a deploy can be tested against a **stale bundle**. Check the bundle hash the page actually loaded against `curl`ing the live HTML before believing a browser test — it produced one false failure here.
 
 ### Phase 6 — Production hardening
+- [x] **Cutover: the old code is gone.** `backend-v2/`/`frontend-v2/` renamed to `backend/`/`frontend/`, the Express + Prisma + React app deleted (191 files, −28.5k lines), the vestigial root npm-workspace manifest removed, and the backend moved off npm onto pnpm so the repo has one package manager and one lockfile per app. Nothing about the deployed Worker or Pages project changed — only where the source lives.
 - [x] Security: every route auth + ownership checked, no debug route, CORS from an explicit allowlist
 - [ ] Rate limiting / abuse protection on the login endpoint
 - [ ] Vitest: services (r2, groq, quota) + route integration tests
 - [ ] Observability: structured logging (Workers logs), error tracking
 - [ ] R2 custom domain + caching for delivery
 - [x] Deploy: Worker + R2 + Queues + cron — live; Pages: single `archivedrop` project (the interim `archivedrop-app` / `archivedrop-v2` projects were deleted once the rebuild was verified)
-- [x] E2E storage path verified: `backend-v2/scripts/smoke-storage.sh` (login → presign → PUT → confirm → quota → delete) and `scripts/verify-playback.sh` (signed playback URL serves the real bytes; unsigned key refused; delete removes the R2 object, proven by re-requesting the same signed URL)
+- [x] E2E storage path verified: `backend/scripts/smoke-storage.sh` (login → presign → PUT → confirm → quota → delete) and `scripts/verify-playback.sh` (signed playback URL serves the real bytes; unsigned key refused; delete removes the R2 object, proven by re-requesting the same signed URL)
 - [x] Migrations are testable without touching the database: `scripts/dryrun-migration.ts <file>` applies a migration in a transaction and always rolls back, so the hand-written parts Drizzle can't generate (extensions, functions) are provable before they run for real. `scripts/verify-search.ts` runs the real search service inside the same kind of rolled-back transaction — 30 checks over SQL semantics, Arabic normalization and adversarial input, no writes.
 - [x] Hyperdrive query caching **disabled** — it was on by default and broke read-after-write
-- [ ] Data migration: move existing B2 files → R2 (if old data should be kept)
+- [x] Data migration: **not needed** — decided to start fresh (§6), so there is no B2 → R2 script
 
 ---
 
@@ -252,22 +257,15 @@ Decision (supersedes "clean up `frontend/`"): **rebuild fresh** against the v2 A
 - [x] **Old B2 data: start fresh.** Decided — no migration script. The R2 bucket stays empty and the old library is abandoned.
 - [x] **Groq model: `whisper-large-v3-turbo` on real audio.** A real 7.1 MB Arabic track transcribed on the first attempt into 32 timestamped segments with `language: Arabic` detected. `GROQ_MODEL` remains the escape hatch to `whisper-large-v3` (more accurate, also translates) if accuracy disappoints on other material.
 - [ ] **Groq account tier: partly settled.** 7.1 MB works (free tier caps *fetched* files at 25 MB in url mode). Still untested: a file near or above 25 MB, and what Groq actually returns when one is sent — that error should be classified per manent and surfaced in `captionErrorMessage`, not retried to the DLQ. Chunking only if a real file needs it.
-- [ ] Shared types package (frontend + backend) — the client types in `frontend-v2/src/lib/types.ts` are still hand-written copies of the serializers. Low risk (a mismatch shows up as a type error at the call site) but it is a copy.
+- [ ] Shared types package (frontend + backend) — the client types in `frontend/src/lib/types.ts` are still hand-written copies of the serializers. Low risk (a mismatch shows up as a type error at the call site) but it is a copy.
 - [ ] Video transcription: extract audio track (where? client-side pre-upload vs separate service) or keep audio-only for v1
 - [ ] Domain strategy: custom domain for R2 delivery + Worker API (e.g. `cdn.` / `api.` subdomains)
-- [x] Old repo fate: build `backend-v2/`+`frontend-v2/` alongside, then **delete-and-replace in place** at Phase 6 (renaming `-v2` dirs to `backend/`/`frontend/`). Repo name `archiver` intentionally unchanged (decision #6).
+- [x] Old repo fate: built alongside in `-v2` dirs, then **delete-and-replace in place** — done, `backend/`/`frontend/` are the only copies. Repo name `archiver` intentionally unchanged (decision #6).
 
 ---
 
-## 7. Reference — key old-code locations (for lookup during rewrite)
+## 7. Reference
 
-| Thing | Where |
-|---|---|
-| DB schema | `backend/prisma/schema.prisma` |
-| Search vector migration | `backend/prisma/migrations/20250628183218_add_search_vector/migration.sql` |
-| Caption status semantics | `backend/src/services/CaptionJobService.ts` |
-| Whisper replacement target | `backend/src/services/CaptionService.ts` (Gemini + timestamp heuristics) |
-| Arabic text utils (keep) | `backend/src/utils/arabicTextUtils.ts` |
-| Caption editor UX to rebuild | `frontend/src/pages/CaptionEditorPage.tsx` |
-| Design-token usage (undefined vars) | `frontend/src/pages/LoginPage.tsx`, `SettingsPage.tsx`, `components/common/*` |
-| Old B2 service (deleted) | `backend/src/services/BackblazeService.ts` |
+The old app's files are gone from the working tree; §3's table of findings is the
+summary of what mattered in them. Anything that needs reading can be recovered
+from git history — the cutover commit is the boundary.

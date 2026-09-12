@@ -1,52 +1,37 @@
 {
-    "name": "archivedrop-frontend",
-    "version": "1.0.0",
-    "description": "Frontend React app for ArchiveDrop",
-    "private": true,
-    "type": "module",
-    "scripts": {
-        "dev": "vite",
-        "build": "tsc && vite build",
-        "preview": "vite preview",
-        "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
-    },
-    "dependencies": {
-        "@types/lodash": "^4.17.19",
-        "axios": "^1.6.5",
-        "clsx": "^2.0.0",
-        "date-fns": "^4.1.0",
-        "framer-motion": "^10.16.16",
-        "hls.js": "^1.4.14",
-        "lodash": "^4.17.21",
-        "lucide-react": "^0.303.0",
-        "plyr": "^3.7.8",
-        "react": "^18.2.0",
-        "react-dom": "^18.2.0",
-        "react-dropzone": "^14.2.3",
-        "react-hook-form": "^7.48.2",
-        "react-hot-toast": "^2.4.1",
-        "react-icons": "^5.5.0",
-        "react-infinite-scroll-component": "^6.1.0",
-        "react-intersection-observer": "^9.16.0",
-        "react-query": "^3.39.3",
-        "react-router-dom": "^6.20.1",
-        "socket.io-client": "^4.8.1",
-        "tailwind-merge": "^2.2.0"
-    },
-    "devDependencies": {
-        "@types/google.accounts": "^0.0.14",
-        "@types/react": "^18.2.45",
-        "@types/react-dom": "^18.2.18",
-        "@typescript-eslint/eslint-plugin": "^6.14.0",
-        "@typescript-eslint/parser": "^6.14.0",
-        "@vitejs/plugin-react": "^4.2.1",
-        "autoprefixer": "^10.4.16",
-        "eslint": "^8.55.0",
-        "eslint-plugin-react-hooks": "^4.6.0",
-        "eslint-plugin-react-refresh": "^0.4.5",
-        "postcss": "^8.4.32",
-        "tailwindcss": "^3.4.0",
-        "typescript": "^5.2.2",
-        "vite": "^5.0.8"
-    }
+  "name": "archivedrop-frontend",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "ArchiveDrop frontend — React 19 + Vite + Tailwind 4 on Cloudflare Pages",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "pnpm run build && wrangler dev",
+    "test": "vitest run",
+    "deploy": "pnpm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.102.8",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.45.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.18.3",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.54.8",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0",
+    "wrangler": "^4.131.1"
+  }
 }

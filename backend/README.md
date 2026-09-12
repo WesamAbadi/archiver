@@ -1,4 +1,4 @@
-# ArchiveDrop API v2
+# ArchiveDrop API
 
 Cloudflare Workers + Hono + Drizzle (Postgres via Hyperdrive) + R2. The rewrite described in [`../MIGRATION_PLAN.md`](../MIGRATION_PLAN.md).
 
@@ -21,8 +21,10 @@ test/               vitest unit tests
 
 ## Setup
 
+Uses **pnpm** (as does the frontend) — one package manager for the repo.
+
 ```bash
-npm install
+pnpm install
 
 # Local secrets for `wrangler dev` (same keys as production — see .env.example):
 cp .dev.vars.example .dev.vars
@@ -32,9 +34,9 @@ cp .env.example .env        # fill in DATABASE_URL only
 npx drizzle-kit generate
 npx drizzle-kit migrate
 
-npm run typecheck
-npm test
-npm run dev                 # wrangler dev on http://localhost:8787
+pnpm typecheck
+pnpm test
+pnpm dev                    # wrangler dev on http://localhost:8787
 ```
 
 ### Environment variables — where each one lives
@@ -87,7 +89,7 @@ Rule of thumb: **one value, one place.** Vars that aren't secrets are committed 
    npx wrangler secret put R2_SECRET_ACCESS_KEY
    ```
 7. **Bucket CORS** (required for browser PUTs) — allow `PUT, GET` from your frontend origin, expose `ETag` (dashboard → R2 → bucket → CORS policy).
-8. **Deploy** — `npm run deploy`, then verify: `curl https://<worker-domain>/health`
+8. **Deploy** — `pnpm deploy`, then verify: `curl https://<worker-domain>/health`
 9. **CORS** — add your production Pages URL to `CORS_ORIGINS` in `wrangler.jsonc` and redeploy.
 
 ## Troubleshooting

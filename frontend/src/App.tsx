@@ -1,76 +1,46 @@
-import React from 'react';
-import { Routes, Route } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from 'react-query';
-import { AuthProvider } from './contexts/AuthContext';
-import { SocketProvider } from './contexts/SocketContext';
-import { UploadProvider } from './contexts/UploadContext';
-import HomePage from './pages/HomePage';
-import { LoginPage } from './pages/LoginPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { WatchPage } from './pages/WatchPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { SearchPage } from './pages/SearchPage';
-import CaptionEditorPage from './pages/CaptionEditorPage';
-import { ProtectedRoute } from './components/ProtectedRoute';
-import Navbar from './components/Navbar';
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { AppShell } from '@/components/AppShell';
+import { ToastViewport } from '@/components/ui/toast';
+import { LoginPage } from '@/features/auth/LoginPage';
+import { RedirectIfAuthed, RequireAuth } from '@/features/auth/guards';
+import { LibraryPage } from '@/features/library/LibraryPage';
+import { SearchPage } from '@/features/search/SearchPage';
+import { WatchPage } from '@/features/watch/WatchPage';
+import { CaptionEditorPage } from '@/features/editor/CaptionEditorPage';
+import { SettingsPage } from '@/features/settings/SettingsPage';
+import { NotFoundPage } from '@/features/misc/NotFoundPage';
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-      retry: 1,
-      staleTime: 5 * 60 * 1000,
-      cacheTime: 10 * 60 * 1000,
-    },
-  },
-});
-
-function App() {
+export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <SocketProvider>
-          <UploadProvider>
-            <div className="min-h-screen bg-gray-900 flex flex-col">
-              <Navbar />
-              <main className="flex-1 w-full pb-safe pb-16 md:pb-0">
-                <Routes>
-                  <Route path="/login" element={<LoginPage />} />
-                  <Route path="/" element={<HomePage />} />
-                  <Route path="/watch/:id" element={<WatchPage />} />
-                  <Route path="/search" element={<SearchPage />} />
-                  <Route
-                    path="/dashboard"
-                    element={
-                      <ProtectedRoute>
-                        <DashboardPage />
-                      </ProtectedRoute>
-                    }
-                  />
-                  <Route
-                    path="/media/:mediaId/captions"
-                    element={
-                      <ProtectedRoute>
-                        <CaptionEditorPage />
-                      </ProtectedRoute>
-                    }
-                  />
-                  <Route
-                    path="/settings"
-                    element={
-                      <ProtectedRoute>
-                        <SettingsPage />
-                      </ProtectedRoute>
-                    }
-                  />
-                </Routes>
-              </main>
-            </div>
-          </UploadProvider>
-        </SocketProvider>
-      </AuthProvider>
-    </QueryClientProvider>
+    <>
+      <Routes>
+        <Route
+          path="/login"
+          element={
+            <RedirectIfAuthed>
+              <LoginPage />
+            </RedirectIfAuthed>
+          }
+        />
+
+        <Route
+          element={
+            <RequireAuth>
+              <AppShell />
+            </RequireAuth>
+          }
+        >
+          <Route path="/library" element={<LibraryPage />} />
+          <Route path="/search" element={<SearchPage />} />
+          <Route path="/watch/:id" element={<WatchPage />} />
+          <Route path="/watch/:id/edit" element={<CaptionEditorPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+        </Route>
+
+        <Route path="/" element={<Navigate to="/library" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
+      <ToastViewport />
+    </>
   );
 }
-
-export default App; 

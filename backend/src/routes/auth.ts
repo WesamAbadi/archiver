@@ -1,160 +1,88 @@
-import { Router } from 'express';
-import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
-import { asyncHandler } from '../middleware/errorHandler';
-import { verifyGoogleToken, generateJWT, findOrCreateUser } from '../lib/auth';
-import prisma from '../lib/database';
-import { UserPreferences, Visibility, SortOrder } from '../types';
+/**
+ * Auth routes — single-admin login.
+ *
+ * POST /auth/login   username + password -> session token
+ * POST /auth/logout  revoke the presented token (idempotent)
+ * GET  /auth/me      validate a stored token on app boot
+ */
+import { Hono } from 'hono';
+import { z } from 'zod';
+import type { AppEnv } from '../env';
+import {
+  hashSessionToken,
+  requireAuth,
+  startAdminSession,
+  verifyAdminCredentials,
+} from '../auth';
+import { deleteSession } from '../services/sessions';
 
-const router: Router = Router();
+const loginSchema = z.object({
+  username: z.string().min(1).max(64),
+  password: z.string().min(1).max(256),
+});
 
-// Debug endpoint to check configuration
-router.get('/debug', asyncHandler(async (req, res) => {
-  res.json({
+export const authRoutes = new Hono<AppEnv>();
+
+authRoutes.post('/login', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = loginSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ success: false, error: 'Username and password are required' }, 400);
+  }
+
+  // Fail loudly rather than treating "no password configured" as "no auth".
+  if (!c.env.ADMIN_PASSWORD) {
+    console.error('[auth] ADMIN_PASSWORD is not configured — refusing login');
+    return c.json({ success: false, error: 'Admin login is not configured' }, 503);
+  }
+
+  const valid = await verifyAdminCredentials(parsed.data.username, parsed.data.password, c.env);
+  if (!valid) {
+    // Deliberately vague — never reveal which half was wrong.
+    return c.json({ success: false, error: 'Invalid credentials' }, 401);
+  }
+
+  const session = await startAdminSession(c.get('db'), c.env);
+
+  return c.json({
     success: true,
     data: {
-      googleClientId: process.env.GOOGLE_CLIENT_ID ? 'Set' : 'Not set',
-      jwtSecret: process.env.JWT_SECRET ? 'Set' : 'Not set',
-      databaseUrl: process.env.DATABASE_URL ? 'Set' : 'Not set',
-      environment: process.env.NODE_ENV || 'development',
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+      user: {
+        id: session.user.id,
+        uid: session.user.uid,
+        displayName: session.user.displayName,
+        email: session.user.email,
+      },
     },
   });
-}));
+});
 
-// Google OAuth login
-router.post('/google', asyncHandler(async (req, res) => {
-  const { token } = req.body;
-  
-  if (!token) {
-    res.status(400).json({
-      success: false,
-      error: 'Google token is required',
-    });
-    return;
-  }
-  
-  if (!process.env.GOOGLE_CLIENT_ID) {
-    res.status(500).json({
-      success: false,
-      error: 'Google Client ID not configured on server',
-    });
-    return;
+// No auth middleware on purpose: logging out with an already-dead token should
+// still succeed (idempotent), and the only effect is deleting that session.
+authRoutes.post('/logout', async (c) => {
+  const header = c.req.header('Authorization');
+  const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : '';
+
+  if (token) {
+    await deleteSession(c.get('db'), await hashSessionToken(token));
   }
 
-  if (!process.env.JWT_SECRET) {
-    res.status(500).json({
-      success: false,
-      error: 'JWT Secret not configured on server',
-    });
-    return;
-  }
-  
-  try {
-    console.log('Verifying Google token...');
-    // Verify Google token
-    const googlePayload = await verifyGoogleToken(token);
-    console.log('Google token verified for user:', googlePayload.email);
-    
-    // Find or create user
-    const user = await findOrCreateUser(googlePayload);
-    console.log('User found/created:', user.email);
-    
-    // Generate JWT
-    const jwt = generateJWT({
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName || undefined,
-    });
-    console.log('JWT generated successfully');
-    
-    res.json({
-      success: true,
-      data: {
-        user,
-        token: jwt,
+  return c.json({ success: true, message: 'Logged out' });
+});
+
+authRoutes.get('/me', requireAuth, async (c) => {
+  const admin = c.get('admin');
+  return c.json({
+    success: true,
+    data: {
+      user: {
+        id: admin.id,
+        uid: admin.uid,
+        displayName: admin.displayName,
+        email: admin.email,
       },
-    });
-  } catch (error) {
-    console.error('Google auth error:', error);
-    res.status(401).json({
-      success: false,
-      error: `Authentication failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-    });
-  }
-}));
-
-// Get current user profile
-router.get('/me', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const user = await prisma.user.findUnique({
-    where: { uid: req.user.uid },
+    },
   });
-  
-  if (!user) {
-    res.status(404).json({
-      success: false,
-      error: 'User not found',
-    });
-    return;
-  }
-  
-  res.json({ success: true, data: user });
-}));
-
-// Update user preferences
-router.patch('/preferences', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const { 
-    defaultVisibility, 
-    sortOrder, 
-    autoGenerateMetadata, 
-    notificationsEnabled 
-  } = req.body;
-  
-  const updateData: any = {};
-  
-  if (defaultVisibility !== undefined) {
-    updateData.defaultVisibility = defaultVisibility as Visibility;
-  }
-  if (sortOrder !== undefined) {
-    updateData.sortOrder = sortOrder as SortOrder;
-  }
-  if (autoGenerateMetadata !== undefined) {
-    updateData.autoGenerateMetadata = autoGenerateMetadata;
-  }
-  if (notificationsEnabled !== undefined) {
-    updateData.notificationsEnabled = notificationsEnabled;
-  }
-  
-  const user = await prisma.user.update({
-    where: { uid: req.user.uid },
-    data: updateData,
-  });
-  
-  res.json({ success: true, data: user });
-}));
-
-// Update user profile
-router.patch('/profile', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const { displayName, photoURL } = req.body;
-  
-  const updateData: any = {};
-  if (displayName !== undefined) updateData.displayName = displayName;
-  if (photoURL !== undefined) updateData.photoURL = photoURL;
-  
-  const user = await prisma.user.update({
-    where: { uid: req.user.uid },
-    data: updateData,
-  });
-  
-  res.json({ success: true, data: user });
-}));
-
-// Delete user account
-router.delete('/account', authenticateToken, asyncHandler(async (req: AuthenticatedRequest, res) => {
-  // Prisma will handle cascading deletes based on schema
-  await prisma.user.delete({
-    where: { uid: req.user.uid },
-  });
-  
-  res.json({ success: true, message: 'Account deleted successfully' });
-}));
-
-export default router; 
+});

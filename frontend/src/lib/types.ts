@@ -1,5 +1,5 @@
 /**
- * API types — mirrors the Worker's serializers (backend-v2/src/services/*).
+ * API types — mirrors the Worker's serializers (backend/src/services/*).
  * Kept hand-written for now; a shared package is a later refactor.
  */
 
@@ -132,7 +132,7 @@ export interface UploadStartResult {
 }
 
 // ---------------------------------------------------------------------------
-// Search (mirrors backend-v2/src/services/search.ts)
+// Search (mirrors backend/src/services/search.ts)
 // ---------------------------------------------------------------------------
 
 /** Which field a result matched on. `lyrics` means the transcript. */

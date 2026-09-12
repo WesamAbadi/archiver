@@ -1,7 +1,6 @@
-# ArchiveDrop — frontend (v2)
+# ArchiveDrop — frontend
 
-Rebuilt from scratch against the v2 Worker API. The old `frontend/` is kept only
-as reference while this proves itself out.
+The web app: React SPA on Cloudflare Pages, talking to the Worker in `../backend/`.
 
 **Stack:** React 19 · Vite 8 · Tailwind 4 · TanStack Query 5 · React Router 7 ·
 TypeScript in strict mode (`noUncheckedIndexedAccess`, `noUnusedLocals`).
@@ -11,14 +10,14 @@ TypeScript in strict mode (`noUncheckedIndexedAccess`, `noUnusedLocals`).
 ## Running it
 
 ```bash
-pnpm install          # or npm install
+pnpm install
 pnpm dev              # http://localhost:5173
 ```
 
 Dev proxies `/api` to `http://localhost:8787`, so run the Worker alongside:
 
 ```bash
-cd ../backend-v2 && npm run dev
+cd ../backend && pnpm dev
 ```
 
 `VITE_API_URL` may stay **empty** in dev (the proxy makes it same-origin).

@@ -1,7 +1,7 @@
 /**
  * Search integration test — real service code, real Postgres, zero mutation.
  *
- *   cd backend-v2 && npx tsx scripts/verify-search.ts
+ *   cd backend && pnpm exec tsx scripts/verify-search.ts
  *
  * How it stays safe: everything runs inside ONE transaction on ONE connection
  * that is always rolled back, and the search service is handed a Drizzle client

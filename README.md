@@ -1,86 +1,78 @@
-# ArchiveDrop 📁
+# ArchiveDrop
 
-A web app that downloads media from YouTube, SoundCloud, Twitter and more, stores them in your Backblaze B2 bucket, and auto-generates captions/metadata using AI.
+A private, single-owner media archive. Upload audio, video or images straight to
+your own storage, get a timestamped transcript back automatically, edit it, and
+search across titles, tags, notes **and lyrics**.
 
-## Features
+Rebuilt end to end on Cloudflare. The old Express + Prisma + React app was
+deleted; [`MIGRATION_PLAN.md`](./MIGRATION_PLAN.md) records what was replaced and
+why (the old code is still reachable in git history).
 
-- **Multi-platform**: YouTube, SoundCloud, Twitter, direct uploads
-- **AI-powered**: Auto-generated captions, descriptions, and tags (Gemini)
-- **Cloud storage**: Your own Backblaze B2 bucket
-- **Smart search**: Full-text search across content and captions
-- **Privacy controls**: Public/private sharing
-- **Caption queue**: Independent AI transcription with rate limiting
+## How it works
 
-## Tech Stack
+```
+browser ──PUT file──────────────► R2 bucket          (bytes never touch the API)
+   │                                 ▲
+   │ 1. start  2. confirm            │ presigned URL
+   ▼                                 │
+Worker (Hono) ──enqueue──► Cloudflare Queue ──► Groq Whisper
+   │                                              │ real segment timestamps
+   ▼                                              ▼
+Neon Postgres (via Hyperdrive) ◄────────── transcript + segments
+```
 
-- Frontend: React + TypeScript + Tailwind CSS
-- Backend: Node.js + Express + PostgreSQL + Prisma
-- Storage: Backblaze B2
-- AI: Google Gemini API
-- Auth: Google OAuth
+- **Uploads never transit the Worker.** The API issues a presigned PUT; the
+  browser sends the file to R2 directly, with progress events.
+- **Transcription is a queue, not a timer.** A DB-backed job row plus Cloudflare
+  Queues, with retries, a DLQ and a cron sweep that re-sends dropped messages.
+- **Search runs in Postgres.** Arabic normalization lives in the database and is
+  applied to both the indexed columns and the query, so they can't disagree.
 
-## Quick Setup
+## Stack
 
-1. **Clone and install**
+| Piece | What |
+|---|---|
+| `backend/` | Hono on Cloudflare Workers — Drizzle ORM, R2, Queues, cron |
+| `frontend/` | React 19 + Vite + Tailwind 4 on Cloudflare Pages |
+| Database | Neon Postgres, reached through Hyperdrive |
+| Storage | Cloudflare R2 (private bucket, presigned URLs) |
+| Transcription | Groq `whisper-large-v3-turbo` |
+
+There is deliberately **no root package manifest**: the Worker and the Pages site
+are independent deployables with separate lockfiles. Install and run each one
+where it lives — see its README.
+
+## Running locally
+
+Two terminals. Node 20+ and pnpm.
+
 ```bash
-git clone <repo-url>
-cd archiver
-npm install
+cd backend   && pnpm install && pnpm dev    # Worker → http://localhost:8787
+cd frontend  && pnpm install && pnpm dev    # Site   → http://localhost:5173
 ```
 
-2. **Database setup**
+The frontend dev server proxies `/api` to the Worker, so no CORS setup is needed
+locally. Each app's README covers secrets, migrations and deploy.
+
+## Deploying
+
 ```bash
-cd backend
-npx prisma migrate dev
-npx prisma generate
+cd backend  && pnpm deploy
+cd frontend && pnpm build && npx wrangler pages deploy dist --project-name archivedrop
 ```
 
-3. **Configure environment**
+## Auth
 
-Backend `.env`:
-```env
-DATABASE_URL="postgresql://user:pass@localhost:5432/archivedrop"
-GOOGLE_CLIENT_ID=your-google-client-id
-JWT_SECRET=your-jwt-secret
-B2_APPLICATION_KEY_ID=your-b2-key-id
-B2_APPLICATION_KEY=your-b2-application-key
-B2_BUCKET_ID=your-b2-bucket-id
-BUCKET_NAME=your-bucket-name
-GEMINI_API_KEY=your-gemini-api-key
-CAPTION_JOBS_PER_MINUTE=2
-CAPTION_JOBS_PER_DAY=1000
-PORT=3003
-```
+Single admin, no accounts. One username and password (`ADMIN_USERNAME` /
+`ADMIN_PASSWORD`); the comparison is constant-time and fails closed if the
+password isn't configured. Sessions are opaque tokens stored server-side as
+SHA-256 hashes, so they are revocable and expire.
 
-Frontend `.env`:
-```env
-VITE_API_URL=http://localhost:3003/api
-VITE_GOOGLE_CLIENT_ID=your-google-client-id
-```
+## Docs
 
-4. **Run**
-```bash
-# Start both frontend and backend
-npm run dev
-```
-
-Access at http://localhost:5173
-
-## Services Needed
-
-- **PostgreSQL**: Database
-- **Backblaze B2**: File storage ([sign up](https://www.backblaze.com/b2))
-- **Google Cloud**: OAuth + Gemini API ([console](https://console.cloud.google.com))
-
-## Caption Queue
-
-Upload → Process → Queue for AI captions → Generate transcripts
-
-- Rate limited to respect API quotas
-- Shows queue position and estimated time
-- Retry failed jobs automatically
-- Status tracking: Pending → Queued → Processing → Complete
-
-## License
-
-MIT 
+- [`MIGRATION_PLAN.md`](./MIGRATION_PLAN.md) — the migration itself: decisions,
+  defects found in the old app, phase status, open questions.
+- [`backend/README.md`](./backend/README.md) — env vars, migrations, the upload
+  and transcription pipelines, deploy traps.
+- [`frontend/README.md`](./frontend/README.md) — the API-origin rule, structure,
+  and the conventions the UI follows.

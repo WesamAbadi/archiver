@@ -1,119 +1,88 @@
-import express from 'express';
-import { createServer } from 'http';
-import { Server } from 'socket.io';
-import cors from 'cors';
-import helmet from 'helmet';
-import dotenv from 'dotenv';
-import prisma from './lib/database';
-import { errorHandler } from './middleware/errorHandler';
-import { requestLogger } from './middleware/requestLogger';
+/**
+ * ArchiveDrop API — Cloudflare Workers + Hono.
+ */
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { logger } from 'hono/logger';
+import type { AppEnv, Env } from './env';
+import { createDB } from './db/client';
+import { authRoutes } from './routes/auth';
+import { mediaRoutes } from './routes/media';
+import { captionRoutes } from './routes/captions';
+import { searchRoutes } from './routes/search';
+import { handleQueueBatch, handleScheduled } from './queue/consumer';
+import type { CaptionJobMessage } from './queue/messages';
 
-// Load environment variables
-dotenv.config();
+const app = new Hono<AppEnv>();
 
-// Validate database connection
-async function validateDatabaseConnection() {
-  try {
-    await prisma.$connect();
-    console.log('✅ Database connected successfully');
-  } catch (error) {
-    console.error('❌ Database connection failed:', error);
-    process.exit(1);
-  }
-}
+// ---------------------------------------------------------------------------
+// Global middleware
+// ---------------------------------------------------------------------------
 
-// Import routes
-import authRoutes from './routes/auth';
-import mediaRoutes from './routes/media';
-import archiveRoutes from './routes/archive';
-import userRoutes from './routes/user';
-import searchRoutes from './routes/search';
+app.use('*', logger()); // swap for structured logging in Phase 6
 
-const app = express();
-const server = createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: [
-      process.env.FRONTEND_URL,
-      /^https:\/\/.*\.nglocalhost\.com$/,
-      /^https:\/\/.*\.vercel\.app$/,
-      "http://localhost:5173"
-    ],
-    methods: ["GET", "POST"]
-  }
+// CORS — explicit allowlist from env (the old app allowed any *.vercel.app)
+app.use('*', (c, next) => {
+  const origins = (c.env.CORS_ORIGINS ?? 'http://localhost:5173')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return cors({
+    origin: origins,
+    // PUT is here because the caption editor saves segments with
+    // PUT /api/media/:id/captions/:captionId. Omitting it meant the browser's
+    // preflight was rejected and saving a transcript failed with a bare
+    // "Could not reach the server" — while every curl-based test passed, since
+    // curl does not send a preflight. Any new method used by the frontend must
+    // be added here or the request dies in the browser and nowhere else.
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 86400,
+  })(c, next);
 });
 
-const PORT = process.env.PORT || 3003;
-
-// Middleware
-app.use(helmet());
-app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL,
-    /^https:\/\/.*\.nglocalhost\.com$/,
-    /^https:\/\/.*\.vercel\.app$/,
-    "http://localhost:5173"
-  ],
-  credentials: true,
-}));
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use(requestLogger);
-
-// Socket.IO for real-time updates
-io.on('connection', (socket) => {
-  console.log(`[SOCKET] Client connected: ${socket.id}`);
-  
-  socket.on('disconnect', () => {
-    console.log(`[SOCKET] Client disconnected: ${socket.id}`);
-  });
-  
-  socket.on('join-room', (userId: string) => {
-    console.log(`[SOCKET] User ${userId} joining room user:${userId}`);
-    socket.join(`user:${userId}`);
-    socket.emit('joined-room', { userId, room: `user:${userId}` });
-    console.log(`[SOCKET] User ${userId} successfully joined room user:${userId}`);
-  });
-
-  socket.on('error', (error) => {
-    console.error(`[SOCKET] Socket error for ${socket.id}:`, error);
-  });
+// Per-request DB client (required for Hyperdrive). Scoped to /api/* so the
+// /health check stays DB-free and can't hang when Postgres is unreachable.
+app.use('/api/*', async (c, next) => {
+  c.set('db', await createDB(c.env));
+  return next();
 });
 
-// Make io available to routes
-app.set('io', io);
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
 
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/media', mediaRoutes);
-app.use('/api/archive', archiveRoutes);
-app.use('/api/user', userRoutes);
-app.use('/api/search', searchRoutes);
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
+app.get('/health', (c) =>
+  c.json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
+  }),
+);
+
+app.route('/api/auth', authRoutes);
+app.route('/api/media', mediaRoutes);
+app.route('/api/media', captionRoutes);
+app.route('/api/search', searchRoutes);
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+app.onError((err, c) => {
+  console.error(`[error] ${c.req.method} ${c.req.path}:`, err);
+  // Never leak internal error details to clients
+  return c.json({ success: false, error: 'Internal Server Error' }, 500);
 });
 
-// Error handling middleware (must be last)
-app.use(errorHandler);
+app.notFound((c) => c.json({ success: false, error: 'Not Found' }, 404));
 
-// Start server after validating database connection
-async function startServer() {
-  await validateDatabaseConnection();
-  
-  server.listen(PORT, () => {
-    console.log(`🚀 ArchiveDrop backend running on port ${PORT}`);
-    console.log(`📊 Health check: http://localhost:${PORT}/health`);
-    console.log(`🔌 WebSocket server ready for real-time updates`);
-  });
-}
+// ---------------------------------------------------------------------------
+// Workers entry — HTTP + Queues consumer + cron
+// ---------------------------------------------------------------------------
 
-startServer().catch((error) => {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-}); 
+export default {
+  fetch: app.fetch,
+  queue: handleQueueBatch,
+  scheduled: handleScheduled,
+} satisfies ExportedHandler<Env, CaptionJobMessage>;
