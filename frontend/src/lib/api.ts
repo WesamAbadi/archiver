@@ -1,7 +1,6 @@
 import axios from 'axios'
 import { authService } from './auth'
-
-const API_BASE_URL = '/api'
+import { API_BASE_URL } from './apiBase'
 
 export const api = axios.create({
   baseURL: API_BASE_URL,

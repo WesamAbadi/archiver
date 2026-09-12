@@ -1,156 +1,152 @@
 /**
- * Auth: Google Sign-In (One Tap / GSI) ID token verification + session JWTs.
+ * Auth — single-admin login with opaque, server-side sessions.
  *
- * - Google ID tokens are verified against Google's JWKS using `jose`
- *   (no google-auth-library — it depends on Node APIs).
- * - Session JWTs are signed with HS256 using a server secret.
- *   (EdDSA/ES256 would be nicer; HS256 keeps local dev config to one secret.
- *   Swap easily later — the signing API is identical.)
+ * No Google, no JWT, no accounts: one admin (ADMIN_USERNAME/ADMIN_PASSWORD)
+ * logs in once and receives a random 256-bit token. The token's SHA-256 is
+ * stored in `admin_sessions` (see services/sessions.ts), so sessions expire
+ * and can be revoked — neither of which the old JWT flow could do.
  */
-import { SignJWT, jwtVerify, createRemoteJWKSet } from 'jose';
-import type { Context, Next } from 'hono';
-
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-const GOOGLE_JWKS = createRemoteJWKSet(
-  new URL('https://www.googleapis.com/oauth2/v3/certs'),
-);
-
-const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days, same as before
+import { createMiddleware } from 'hono/factory';
+import type { AppEnv } from '../env';
+import type { User } from '../db/schema';
+import { createSession, findSession } from '../services/sessions';
+import { ensureAdminUser, getUserById } from '../services/users';
 
 export interface AuthEnv {
-  GOOGLE_CLIENT_ID: string;
-  JWT_SECRET: string;
+  /** Username for the single admin account. Defaults to `admin`. */
+  ADMIN_USERNAME?: string;
+  /** Password secret. Required — login is refused while unset. */
+  ADMIN_PASSWORD?: string;
+}
+
+export const DEFAULT_ADMIN_USERNAME = 'admin';
+
+/** 7 days, same lifetime the old session JWTs had. */
+export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+// ---------------------------------------------------------------------------
+// Credential check
+// ---------------------------------------------------------------------------
+
+async function sha256Bytes(input: string): Promise<Uint8Array> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return new Uint8Array(digest);
+}
+
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Fixed-length compare with no early exit (no length or prefix timing leak). */
+function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= (a[i] as number) ^ (b[i] as number);
+  return diff === 0;
+}
+
+/**
+ * Compare submitted credentials against the configured admin ones.
+ * Both fields are hashed first so they're always compared as 32 fixed bytes,
+ * and both comparisons always run (no short-circuit on a wrong username).
+ */
+export async function verifyAdminCredentials(
+  username: string,
+  password: string,
+  env: AuthEnv,
+): Promise<boolean> {
+  // Unconfigured password = login disabled, never "any password works".
+  if (!env.ADMIN_PASSWORD) return false;
+
+  const expectedUsername = env.ADMIN_USERNAME?.trim() || DEFAULT_ADMIN_USERNAME;
+  const [gotUser, wantUser, gotPass, wantPass] = await Promise.all([
+    sha256Bytes(username),
+    sha256Bytes(expectedUsername),
+    sha256Bytes(password),
+    sha256Bytes(env.ADMIN_PASSWORD),
+  ]);
+
+  const usernameOk = constantTimeEqual(gotUser, wantUser);
+  const passwordOk = constantTimeEqual(gotPass, wantPass);
+  return usernameOk && passwordOk;
 }
 
 // ---------------------------------------------------------------------------
-// Google ID token verification
+// Session tokens
 // ---------------------------------------------------------------------------
 
-export interface GoogleIdentity {
-  /** OAuth sub claim — stable user identifier */
-  uid: string;
-  email: string;
-  displayName?: string;
-  picture?: string;
+/** 32 random bytes, hex-encoded. Handed to the client exactly once. */
+export function generateSessionToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return hex(bytes);
 }
 
-export async function verifyGoogleIdToken(
-  token: string,
-  clientId: string,
-): Promise<GoogleIdentity> {
-  const { payload } = await jwtVerify(token, GOOGLE_JWKS, {
-    issuer: ['https://accounts.google.com', 'accounts.google.com'],
-    audience: clientId,
-  });
+/** What we store — the raw token never touches the database. */
+export async function hashSessionToken(token: string): Promise<string> {
+  return hex(await sha256Bytes(token));
+}
 
-  const { sub, email, name, picture } = payload as {
-    sub?: string;
-    email?: string;
-    name?: string;
-    picture?: string;
-  };
+export interface StartedSession {
+  token: string;
+  user: User;
+  expiresAt: Date;
+}
 
-  if (!sub || !email) {
-    throw new Error('Google token missing sub/email claims');
+/** Log the admin in: ensure the owner row exists, then open a session. */
+export async function startAdminSession(db: DBLike, env: AuthEnv): Promise<StartedSession> {
+  const username = env.ADMIN_USERNAME?.trim() || DEFAULT_ADMIN_USERNAME;
+  const user = await ensureAdminUser(db, username);
+
+  const token = generateSessionToken();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
+  await createSession(db, await hashSessionToken(token), user.id, expiresAt);
+
+  return { token, user, expiresAt };
+}
+
+/** Structural alias so this module doesn't need to import the driver types. */
+type DBLike = Parameters<typeof ensureAdminUser>[0];
+
+// ---------------------------------------------------------------------------
+// Middleware
+// ---------------------------------------------------------------------------
+
+/**
+ * Require a valid session. Attaches the admin row as `c.get('admin')` so route
+ * handlers never have to re-resolve the owner (the old code looked the user up
+ * separately in every handler, twice per request in some cases).
+ */
+export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
+  const header = c.req.header('Authorization');
+  const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
+
+  if (!token) {
+    return c.json({ success: false, error: 'Authentication required' }, 401);
   }
 
-  return { uid: sub, email, displayName: name, picture };
-}
-
-// ---------------------------------------------------------------------------
-// Session JWTs
-// ---------------------------------------------------------------------------
-
-export interface SessionClaims {
-  uid: string;
-  email: string;
-  displayName?: string;
-}
-
-const secretCache = new Map<string, Uint8Array>();
-function getSecret(secret: string): Uint8Array {
-  let cached = secretCache.get(secret);
-  if (!cached) {
-    cached = new TextEncoder().encode(secret);
-    secretCache.set(secret, cached);
-  }
-  return cached;
-}
-
-export async function signSessionJWT(
-  claims: SessionClaims,
-  secret: string,
-): Promise<string> {
-  return new SignJWT({ uid: claims.uid, email: claims.email, displayName: claims.displayName })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
-    .sign(getSecret(secret));
-}
-
-export async function verifySessionJWT(
-  token: string,
-  secret: string,
-): Promise<SessionClaims> {
-  const { payload } = await jwtVerify(token, getSecret(secret));
-  const { uid, email, displayName } = payload as Record<string, unknown>;
-
-  if (typeof uid !== 'string' || typeof email !== 'string') {
-    throw new Error('Invalid session token claims');
-  }
-
-  return {
-    uid,
-    email,
-    displayName: typeof displayName === 'string' ? displayName : undefined,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Hono middleware// ---------------------------------------------------------------------------
-
-/** Attach `c.set('user', claims)` when a valid Bearer token is present. */
-export function requireAuth(secret: string) {
-  return async (c: Context, next: Next) => {
-    const header = c.req.header('Authorization');
-    const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
-
-    if (!token) {
-      return c.json({ success: false, error: 'Access token required' }, 401);
+  try {
+    const db = c.get('db');
+    const session = await findSession(db, await hashSessionToken(token));
+    if (!session) {
+      return c.json({ success: false, error: 'Invalid or expired session' }, 401);
     }
 
-    try {
-      const claims = await verifySessionJWT(token, secret);
-      c.set('user', claims);
-      await next();
-    } catch {
-      return c.json({ success: false, error: 'Invalid or expired token' }, 403);
+    const admin = await getUserById(db, session.userId);
+    if (!admin) {
+      return c.json({ success: false, error: 'Invalid or expired session' }, 401);
     }
-  };
-}
 
-/** Like `requireAuth`, but anonymous requests pass through with no user. */
-export function optionalAuth(secret: string) {
-  return async (c: Context, next: Next) => {
-    const header = c.req.header('Authorization');
-    const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
-
-    if (token) {
-      try {
-        c.set('user', await verifySessionJWT(token, secret));
-      } catch {
-        // invalid token on optional routes = anonymous
-      }
-    }
+    c.set('admin', admin);
     await next();
-  };
-}
+  } catch (err) {
+    console.error('[auth] session check failed:', err);
+    return c.json({ success: false, error: 'Authentication failed' }, 500);
+  }
+});
 
 declare module 'hono' {
   interface ContextVariableMap {
-    user: SessionClaims;
+    admin: User;
   }
 }

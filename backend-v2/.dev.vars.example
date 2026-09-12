@@ -2,8 +2,7 @@
 # These are the SAME variables as the production secrets — nothing extra,
 # nothing missing. See .env.example for the full reference.
 
-GOOGLE_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
-JWT_SECRET=dev-only-secret-change-me-32-chars-min
+ADMIN_PASSWORD=dev-only-password-change-me
 GROQ_API_KEY=gsk_...
 R2_ACCOUNT_ID=your-cloudflare-account-id
 R2_ACCESS_KEY_ID=your-r2-s3-api-token-id

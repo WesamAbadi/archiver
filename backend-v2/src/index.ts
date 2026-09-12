@@ -35,9 +35,10 @@ app.use('*', (c, next) => {
   })(c, next);
 });
 
-// Per-request DB client (required for Hyperdrive)
-app.use('*', (c, next) => {
-  c.set('db', createDB(c.env));
+// Per-request DB client (required for Hyperdrive). Scoped to /api/* so the
+// /health check stays DB-free and can't hang when Postgres is unreachable.
+app.use('/api/*', async (c, next) => {
+  c.set('db', await createDB(c.env));
   return next();
 });
 

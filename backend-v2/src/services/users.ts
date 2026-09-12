@@ -1,8 +1,12 @@
 /**
- * User service — upsert on Google login + storage quota.
+ * User service — the single admin owner + storage quota.
+ *
+ * There are no accounts: `users` holds exactly ONE row so that media and
+ * caption jobs keep an owner (`user_id` FK) and quota stays per-owner. Nothing
+ * here creates profiles; `ensureAdminUser` is idempotent and only ever touches
+ * that one row.
  *
  * Fixes carried over from the old codebase (MIGRATION_PLAN.md §3.2):
- * - ONE implementation of ensure-user (was copy-pasted 4×)
  * - Quota is a SUM query, not "load every row into JS"
  * - Quota check is called BEFORE an upload URL is issued (was checked after)
  */
@@ -11,61 +15,42 @@ import type { DB } from '../db/client';
 import { users, mediaItems } from '../db/schema';
 import type { User } from '../db/schema';
 import { createId } from '../lib/id';
-import type { GoogleIdentity } from '../auth';
 
 /** 1 GB, same as the old app. Make configurable via env later if needed. */
 export const STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
 
-export async function findOrCreateUser(db: DB, identity: GoogleIdentity): Promise<User> {
-  const existing = await db.query.users.findFirst({ where: eq(users.uid, identity.uid) });
-  if (existing) {
-    // Refresh profile info from Google on each login (same behavior as before)
-    const updated = await db
-      .update(users)
-      .set({
-        displayName: identity.displayName ?? existing.displayName,
-        photoURL: identity.picture ?? existing.photoURL,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, existing.id))
-      .returning();
-    if (!updated[0]) throw new Error('Failed to update user');
-    return updated[0];
-  }
-
-  // No user with this uid — check email (handles the "OAuth sub changed" case the old code handled)
-  const byEmail = await db.query.users.findFirst({ where: eq(users.email, identity.email) });
-  if (byEmail) {
-    const updated = await db
-      .update(users)
-      .set({
-        uid: identity.uid,
-        displayName: identity.displayName ?? byEmail.displayName,
-        photoURL: identity.picture ?? byEmail.photoURL,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, byEmail.id))
-      .returning();
-    if (!updated[0]) throw new Error('Failed to update user');
-    return updated[0];
-  }
-
-  const created = await db
-    .insert(users)
-    .values({
-      id: createId(),
-      uid: identity.uid,
-      email: identity.email,
-      displayName: identity.displayName ?? '',
-      photoURL: identity.picture,
-    })
-    .returning();
-  if (!created[0]) throw new Error('Failed to create user');
-  return created[0];
+/** The admin owner row (there is only ever one). */
+export async function getAdminUser(db: DB): Promise<User | undefined> {
+  const rows = await db.select().from(users).limit(1);
+  return rows[0];
 }
 
-export async function getUserByUid(db: DB, uid: string): Promise<User | undefined> {
-  return db.query.users.findFirst({ where: eq(users.uid, uid) });
+export async function getUserById(db: DB, id: string): Promise<User | undefined> {
+  return db.query.users.findFirst({ where: eq(users.id, id) });
+}
+
+/**
+ * Return the admin row, creating it on first login and keeping its login
+ * identity in sync if ADMIN_USERNAME changes.
+ */
+export async function ensureAdminUser(db: DB, username: string): Promise<User> {
+  const existing = await getAdminUser(db);
+
+  if (existing) {
+    if (existing.uid === username) return existing;
+
+    const updated = await db
+      .update(users)
+      .set({ uid: username, updatedAt: new Date() })
+      .where(eq(users.id, existing.id))
+      .returning();
+    if (!updated[0]) throw new Error('Failed to update admin user');
+    return updated[0];
+  }
+
+  const inserted = await db.insert(users).values({ id: createId(), uid: username }).returning();
+  if (!inserted[0]) throw new Error('Failed to create admin user');
+  return inserted[0];
 }
 
 export interface QuotaInfo {

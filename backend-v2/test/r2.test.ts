@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { objectKeyFor, isAllowedMimeType, ALLOWED_MIME_TYPES } from '../src/services/r2';
-import { signSessionJWT, verifySessionJWT } from '../src/auth';
 
 describe('objectKeyFor', () => {
   it('builds a user/media-scoped key preserving extension', () => {
@@ -37,26 +36,5 @@ describe('isAllowedMimeType', () => {
 
   it('allowlist has no duplicates', () => {
     expect(new Set(ALLOWED_MIME_TYPES).size).toBe(ALLOWED_MIME_TYPES.length);
-  });
-});
-
-describe('session JWT round-trip', () => {
-  const secret = 'test-secret-at-least-32-chars-long!!';
-
-  it('signs and verifies claims', async () => {
-    const token = await signSessionJWT({ uid: 'u123', email: 'a@b.c', displayName: 'Ada' }, secret);
-    const claims = await verifySessionJWT(token, secret);
-    expect(claims.uid).toBe('u123');
-    expect(claims.email).toBe('a@b.c');
-    expect(claims.displayName).toBe('Ada');
-  });
-
-  it('rejects a token signed with a different secret', async () => {
-    const token = await signSessionJWT({ uid: 'u123', email: 'a@b.c' }, secret);
-    await expect(verifySessionJWT(token, 'wrong-secret-wrong-secret-wrong')).rejects.toThrow();
-  });
-
-  it('rejects garbage tokens', async () => {
-    await expect(verifySessionJWT('not-a-jwt', secret)).rejects.toThrow();
   });
 });

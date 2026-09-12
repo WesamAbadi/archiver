@@ -10,12 +10,7 @@
  */
 import { and, eq, desc, sql } from 'drizzle-orm';
 import type { DB } from '../db/client';
-import {
-  mediaItems,
-  mediaFiles,
-  type MediaItem,
-  type Visibility,
-} from '../db/schema';
+import { mediaItems, mediaFiles, type MediaItem } from '../db/schema';
 import { createId } from '../lib/id';
 import {
   objectExists,
@@ -77,16 +72,13 @@ function groupByItem(rows: FileRow[]): Map<string, (typeof mediaFiles.$inferSele
 export async function listUserMedia(
   db: DB,
   userId: string,
-  opts: { page?: number; limit?: number; visibility?: Visibility } = {},
+  opts: { page?: number; limit?: number } = {},
 ): Promise<{ items: MediaItemDTO[]; page: number; limit: number; total: number; totalPages: number }> {
   const page = Math.max(1, opts.page ?? 1);
   const limit = Math.min(100, Math.max(1, opts.limit ?? 20));
   const offset = (page - 1) * limit;
 
-  const conditions = [eq(mediaItems.userId, userId)];
-  if (opts.visibility) conditions.push(eq(mediaItems.visibility, opts.visibility));
-
-  const where = and(...conditions);
+  const where = eq(mediaItems.userId, userId);
 
   const [items, [countRow], fileRows] = await Promise.all([
     db.select().from(mediaItems).where(where).orderBy(desc(mediaItems.createdAt)).limit(limit).offset(offset),
@@ -126,7 +118,6 @@ export async function getMediaItem(
 export interface UpdateMediaInput {
   title?: string;
   description?: string | null;
-  visibility?: Visibility;
   tags?: string[];
 }
 
@@ -141,7 +132,6 @@ export async function updateMediaItem(
     .set({
       ...(updates.title !== undefined && { title: updates.title }),
       ...(updates.description !== undefined && { description: updates.description }),
-      ...(updates.visibility !== undefined && { visibility: updates.visibility }),
       ...(updates.tags !== undefined && { tags: updates.tags }),
       updatedAt: new Date(),
     })
@@ -197,7 +187,7 @@ export async function startUpload(
   db: DB,
   env: R2Env,
   userId: string,
-  input: { filename: string; mimeType: string; size: number; title: string; visibility: Visibility; tags: string[]; description?: string },
+  input: { filename: string; mimeType: string; size: number; title: string; tags: string[]; description?: string },
 ): Promise<CreateUploadResult | UploadStartError> {
   const quota = await getStorageQuota(db, userId);
   if (!quota.hasSpace) {
@@ -216,7 +206,6 @@ export async function startUpload(
       platform: 'DIRECT',
       title: input.title,
       description: input.description,
-      visibility: input.visibility,
       tags: input.tags,
       size: input.size,
       format: input.filename.includes('.') ? input.filename.split('.').pop()!.toLowerCase().slice(0, 32) : '',

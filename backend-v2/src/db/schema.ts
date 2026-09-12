@@ -1,12 +1,13 @@
 /**
  * Drizzle schema — ported from backend/prisma/schema.prisma.
  *
- * v1 scope (per MIGRATION_PLAN.md): User, MediaItem, MediaFile, Caption,
- * CaptionSegment + caption job queue tables. DownloadJob, Like, Comment, View
- * (social features) are intentionally omitted.
+ * Single-admin personal archive: no accounts, no sign-up, no social features.
+ * `users` holds exactly ONE row (the admin) so media/quota keep an owner and
+ * don't need a schema change if multi-user ever returns.
  *
- * Column names/types match the old Postgres tables so existing data can be
- * migrated with minimal transformation later.
+ * Deliberately NOT here: Like, Comment, View, DownloadJob (all social/download
+ * features), and the old engagement counters + PUBLIC/UNLISTED sharing columns
+ * — removed so the API can't expose a surface nobody can reach (single admin).
  */
 import {
   pgTable,
@@ -46,8 +47,6 @@ export const downloadStatusEnum = pgEnum('download_status', [
   'FAILED',
 ]);
 
-export const visibilityEnum = pgEnum('visibility', ['PRIVATE', 'PUBLIC', 'UNLISTED']);
-
 export const sortOrderEnum = pgEnum('sort_order', ['NEWEST', 'OLDEST', 'TITLE', 'POPULAR']);
 
 export const captionStatusEnum = pgEnum('caption_status', [
@@ -74,19 +73,16 @@ export const captionJobStatusEnum = pgEnum('caption_job_status', [
 export const users = pgTable('users', {
   /** DB primary key (was Prisma cuid; we generate nanoid-style ids in app code) */
   id: varchar('id', { length: 32 }).primaryKey(),
-  /** Google OAuth `sub` claim */
+  /** Login identity of the single admin (was the Google OAuth `sub` claim). */
   uid: varchar('uid', { length: 64 }).notNull().unique(),
-  email: varchar('email', { length: 255 }).notNull().unique(),
+  /** Optional — the admin has no account/profile, so this stays null. */
+  email: varchar('email', { length: 255 }).unique(),
   displayName: varchar('display_name', { length: 255 }),
-  photoURL: text('photo_url'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 
-  // Preferences (flat, as before)
-  defaultVisibility: visibilityEnum('default_visibility').notNull().default('PRIVATE'),
+  // Preference kept for the UI's default sort
   sortOrder: sortOrderEnum('sort_order').notNull().default('NEWEST'),
-  autoGenerateMetadata: boolean('auto_generate_metadata').notNull().default(true),
-  notificationsEnabled: boolean('notifications_enabled').notNull().default(true),
 });
 
 // ---------------------------------------------------------------------------
@@ -104,13 +100,10 @@ export const mediaItems = pgTable(
     platform: platformEnum('platform').notNull(),
     title: text('title').notNull(),
     description: text('description'),
-    visibility: visibilityEnum('visibility').notNull().default('PRIVATE'),
     tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     downloadStatus: downloadStatusEnum('download_status').notNull().default('COMPLETED'),
-    /** Public share id (only set when visibility = PUBLIC) */
-    publicId: varchar('public_id', { length: 32 }),
 
     // Caption status tracking
     captionStatus: captionStatusEnum('caption_status').notNull().default('PENDING'),
@@ -133,15 +126,9 @@ export const mediaItems = pgTable(
     aiSummary: text('ai_summary'),
     aiKeywords: text('ai_keywords').array().notNull().default(sql`'{}'::text[]`),
     aiGeneratedAt: timestamp('ai_generated_at', { withTimezone: true }),
-
-    // Engagement counters (kept so a later social phase doesn't need a migration)
-    viewCount: integer('view_count').notNull().default(0),
-    likeCount: integer('like_count').notNull().default(0),
-    commentCount: integer('comment_count').notNull().default(0),
   },
   (t) => [
     index('media_items_user_created_idx').on(t.userId, t.createdAt),
-    index('media_items_public_id_idx').on(t.publicId),
     index('media_items_caption_status_idx').on(t.captionStatus, t.createdAt),
   ],
 );
@@ -229,12 +216,39 @@ export const captionJobs = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Admin sessions — opaque bearer tokens, server-side state (no JWT)
+// ---------------------------------------------------------------------------
+
+export const adminSessions = pgTable(
+  'admin_sessions',
+  {
+    /** SHA-256 of the raw token. The raw value only ever exists client-side. */
+    tokenHash: varchar('token_hash', { length: 64 }).primaryKey(),
+    userId: varchar('user_id', { length: 32 })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('admin_sessions_expires_idx').on(t.expiresAt),
+    index('admin_sessions_user_idx').on(t.userId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Relations
 // ---------------------------------------------------------------------------
 
 export const usersRelations = relations(users, ({ many }) => ({
   mediaItems: many(mediaItems),
   captionJobs: many(captionJobs),
+  sessions: many(adminSessions),
+}));
+
+export const adminSessionsRelations = relations(adminSessions, ({ one }) => ({
+  user: one(users, { fields: [adminSessions.userId], references: [users.id] }),
 }));
 
 export const mediaItemsRelations = relations(mediaItems, ({ one, many }) => ({
@@ -290,8 +304,9 @@ export type CaptionSegment = typeof captionSegments.$inferSelect;
 export type NewCaptionSegment = typeof captionSegments.$inferInsert;
 export type CaptionJob = typeof captionJobs.$inferSelect;
 export type NewCaptionJob = typeof captionJobs.$inferInsert;
+export type AdminSession = typeof adminSessions.$inferSelect;
+export type NewAdminSession = typeof adminSessions.$inferInsert;
 
-export type Visibility = (typeof visibilityEnum.enumValues)[number];
 export type Platform = (typeof platformEnum.enumValues)[number];
 export type CaptionStatus = (typeof captionStatusEnum.enumValues)[number];
 export type CaptionJobStatus = (typeof captionJobStatusEnum.enumValues)[number];

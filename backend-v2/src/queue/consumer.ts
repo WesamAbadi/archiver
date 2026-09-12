@@ -13,7 +13,7 @@
 import type { Env } from '../env';
 import type { CaptionJobMessage } from './messages';
 import { captionJobMessageSchema } from './messages';
-import { createDB } from '../db/client';
+import { createDB, type DB } from '../db/client';
 import * as captionService from '../services/captions';
 import { transcribe, GroqError } from '../services/groq';
 import { presignedGetUrl } from '../services/r2';
@@ -24,7 +24,7 @@ export async function handleQueueBatch(
   batch: MessageBatch<CaptionJobMessage>,
   env: Env,
 ): Promise<void> {
-  const db = createDB(env);
+  const db = await createDB(env);
 
   for (const message of batch.messages) {
     const parsed = captionJobMessageSchema.safeParse(message.body);
@@ -72,7 +72,7 @@ export async function handleQueueBatch(
 }
 
 async function processJob(
-  db: ReturnType<typeof createDB>,
+  db: DB,
   env: Env,
   msg: CaptionJobMessage,
 ): Promise<void> {
@@ -104,7 +104,7 @@ export async function handleScheduled(
   env: Env,
   _ctx: ExecutionContext,
 ): Promise<void> {
-  const db = createDB(env);
+  const db = await createDB(env);
 
   // 1. Reclaim stuck PROCESSING jobs (Worker crashed mid-job, etc.)
   await captionService.reclaimStuckJobs(db);

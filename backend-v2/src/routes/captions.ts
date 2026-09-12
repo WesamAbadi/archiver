@@ -9,27 +9,14 @@ import { z } from 'zod';
 import { and, eq, asc, inArray, desc } from 'drizzle-orm';
 import type { AppEnv } from '../env';
 import { requireAuth } from '../auth';
-import { createDB, type DB } from '../db/client';
+import type { DB } from '../db/client';
 import { captionJobs, captionSegments, captions, mediaItems } from '../db/schema';
 import * as captionService from '../services/captions';
-import { getUserByUid } from '../services/users';
 import { backoffSeconds } from '../services/captions';
 
 export const captionRoutes = new Hono<AppEnv>();
 
-captionRoutes.use('*', async (c, next) => requireAuth(c.env.JWT_SECRET)(c, next));
-
-/** Resolve DB user, or null (responds 404 and returns null when missing). */
-async function requireDbUser(c: any) {
-  const db = c.get('db');
-  const user = c.get('user');
-  const dbUser = await getUserByUid(db, user.uid);
-  if (!dbUser) {
-    await c.json({ success: false, error: 'User not found' }, 404);
-    return null;
-  }
-  return dbUser;
-}
+captionRoutes.use('*', requireAuth);
 
 /** Verify the media item belongs to the user. */
 async function ownedMediaItem(db: DB, mediaItemId: string, userId: string) {
@@ -44,10 +31,9 @@ async function ownedMediaItem(db: DB, mediaItemId: string, userId: string) {
 
 captionRoutes.get('/:mediaItemId/captions', async (c) => {
   const db = c.get('db');
-  const dbUser = await requireDbUser(c);
-  if (!dbUser) return;
+  const admin = c.get('admin');
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), dbUser.id);
+  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const rows = await db.query.captions.findMany({
@@ -64,10 +50,9 @@ captionRoutes.get('/:mediaItemId/captions', async (c) => {
 
 captionRoutes.get('/:mediaItemId/caption-status', async (c) => {
   const db = c.get('db');
-  const dbUser = await requireDbUser(c);
-  if (!dbUser) return;
+  const admin = c.get('admin');
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), dbUser.id);
+  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const job = await db.query.captionJobs.findFirst({
@@ -103,13 +88,12 @@ captionRoutes.get('/:mediaItemId/caption-status', async (c) => {
 
 captionRoutes.post('/:mediaItemId/captions/generate', async (c) => {
   const db = c.get('db');
-  const dbUser = await requireDbUser(c);
-  if (!dbUser) return;
+  const admin = c.get('admin');
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), dbUser.id);
+  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
-  const result = await captionService.createCaptionJob(db, item.id, dbUser.id);
+  const result = await captionService.createCaptionJob(db, item.id, admin.id);
 
   if (typeof result !== 'string') {
     if (result.kind === 'not_found') {
@@ -129,7 +113,7 @@ captionRoutes.post('/:mediaItemId/captions/generate', async (c) => {
       version: 1,
       jobId: result,
       mediaItemId: item.id,
-      userUid: dbUser.uid,
+      userUid: admin.uid,
     });
   } else {
     console.warn('[captions] CAPTION_QUEUE binding missing; job will be picked up by cron');
@@ -167,10 +151,9 @@ const segmentUpsertSchema = z.object({
 /** Replace all segments of the item's auto caption (bulk save from the editor). */
 captionRoutes.put('/:mediaItemId/captions/:captionId', async (c) => {
   const db = c.get('db');
-  const dbUser = await requireDbUser(c);
-  if (!dbUser) return;
+  const admin = c.get('admin');
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), dbUser.id);
+  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const caption = await db.query.captions.findFirst({
@@ -223,10 +206,9 @@ captionRoutes.put('/:mediaItemId/captions/:captionId', async (c) => {
 
 captionRoutes.delete('/:mediaItemId/captions/:captionId', async (c) => {
   const db = c.get('db');
-  const dbUser = await requireDbUser(c);
-  if (!dbUser) return;
+  const admin = c.get('admin');
 
-  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), dbUser.id);
+  const item = await ownedMediaItem(db, c.req.param('mediaItemId'), admin.id);
   if (!item) return c.json({ success: false, error: 'Media item not found' }, 404);
 
   const caption = await db.query.captions.findFirst({

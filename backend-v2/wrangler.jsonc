@@ -27,7 +27,7 @@
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "2b60af1efcb8489e8ffc69605b40bf58"
+      "id": "db89e4c4ee6a4492b4aaf11cb44474f8"
     }
   ],
 
@@ -59,13 +59,13 @@
   },
 
   // Non-secret env vars (committed). Secrets go via `npx wrangler secret put <NAME>`:
-  //   GOOGLE_CLIENT_ID, JWT_SECRET, GROQ_API_KEY, R2_ACCOUNT_ID,
+  //   ADMIN_PASSWORD, GROQ_API_KEY, R2_ACCOUNT_ID,
   //   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY   (full reference: .env.example)
+  // ADMIN_USERNAME is optional here — the admin login defaults to "admin".
   "vars": {
     "R2_BUCKET_NAME": "archivedrop-media",
-    // Comma-separated allowlist. For production add your Pages domain, e.g.:
-    //   "CORS_ORIGINS": "http://localhost:5173, https://archivedrop.pages.dev"
-    "CORS_ORIGINS": "http://localhost:5173"
+    // Comma-separated allowlist of browser origins allowed to call this API.
+    "CORS_ORIGINS": "http://localhost:5173,https://archivedrop-app.pages.dev"
   },
 
   "observability": {

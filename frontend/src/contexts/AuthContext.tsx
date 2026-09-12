@@ -4,7 +4,7 @@ import { authService, User } from '../lib/auth'
 interface AuthContextType {
   user: User | null
   loading: boolean
-  loginWithGoogle: () => Promise<void>
+  login: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
   getToken: () => Promise<string | null>
 }
@@ -33,13 +33,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setLoading(false)
     })
 
+    // Validate a stored token once on boot, so a revoked or expired session
+    // doesn't leave the UI pretending to be signed in.
+    authService.verifySession().finally(() => setLoading(false))
+
     return unsubscribe
   }, [])
 
-  const loginWithGoogle = async () => {
+  const login = async (username: string, password: string) => {
     setLoading(true)
     try {
-      await authService.signInWithGoogle()
+      await authService.login(username, password)
     } finally {
       setLoading(false)
     }
@@ -48,7 +52,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const logout = async () => {
     setLoading(true)
     try {
-      authService.signOut()
+      await authService.logout()
     } finally {
       setLoading(false)
     }
@@ -61,7 +65,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const value: AuthContextType = {
     user,
     loading,
-    loginWithGoogle,
+    login,
     logout,
     getToken,
   }

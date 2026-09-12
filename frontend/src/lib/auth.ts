@@ -1,229 +1,170 @@
-declare global {
-  interface Window {
-    google: typeof google;
-  }
+/**
+ * Auth service — single-admin login.
+ *
+ * No Google, no OAuth, no accounts. The app posts a username + password to
+ * POST /api/auth/login and stores the opaque session token that comes back.
+ * The API validates that token on every request; it expires server-side after
+ * 7 days and can be revoked with POST /api/auth/logout.
+ */
+
+import { API_BASE_URL } from './apiBase'
+
+export interface User {
+  id: string
+  uid: string
+  email?: string | null
+  displayName?: string | null
+  /**
+   * @deprecated No longer returned by the API (the admin has no profile).
+   * Keep as an optional field until the UI stops reading it in Phase 4.
+   */
+  photoURL?: string | null
 }
 
-interface GoogleUser {
-  credential: string;
-  clientId: string;
+interface LoginResponse {
+  success: boolean
+  data?: { token: string; expiresAt: string; user: User }
+  error?: string
 }
 
-interface User {
-  id: string;
-  uid: string;
-  email: string;
-  displayName?: string;
-  photoURL?: string;
-}
+const STORAGE_USER = 'user'
+const STORAGE_TOKEN = 'token'
 
 class AuthService {
-  private user: User | null = null;
+  private user: User | null = null
   private token: string | null = null;
-  private listeners: ((user: User | null) => void)[] = [];
-  private initialized = false;
+  private listeners: ((user: User | null) => void)[] = []
 
   constructor() {
-    this.loadFromStorage();
+    this.loadFromStorage()
   }
 
   private loadFromStorage() {
-    const storedUser = localStorage.getItem('user');
-    const storedToken = localStorage.getItem('token');
-    
-    if (storedUser && storedToken) {
-      this.user = JSON.parse(storedUser);
-      this.token = storedToken;
+    try {
+      const storedUser = localStorage.getItem(STORAGE_USER)
+      const storedToken = localStorage.getItem(STORAGE_TOKEN)
+      if (storedUser && storedToken) {
+        this.user = JSON.parse(storedUser)
+        this.token = storedToken
+      }
+    } catch {
+      // Corrupt storage shouldn't brick the app — treat it as logged out.
+      this.saveToStorage(null, null)
     }
   }
 
   private saveToStorage(user: User | null, token: string | null) {
     if (user && token) {
-      localStorage.setItem('user', JSON.stringify(user));
-      localStorage.setItem('token', token);
+      localStorage.setItem(STORAGE_USER, JSON.stringify(user))
+      localStorage.setItem(STORAGE_TOKEN, token)
     } else {
-      localStorage.removeItem('user');
-      localStorage.removeItem('token');
+      localStorage.removeItem(STORAGE_USER)
+      localStorage.removeItem(STORAGE_TOKEN)
     }
   }
 
   private notifyListeners() {
-    this.listeners.forEach(listener => listener(this.user));
+    this.listeners.forEach((listener) => listener(this.user))
   }
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
+  /** Exchange admin credentials for a session token. */
+  async login(username: string, password: string): Promise<User> {
+    const res = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    })
 
-    return new Promise((resolve, reject) => {
-      // Check if Google Identity Services is already loaded
-      if (window.google?.accounts?.id) {
-        this.initializeGoogleAuth();
-        this.initialized = true;
-        resolve();
-        return;
-      }
+    const data: LoginResponse = await res
+      .json()
+      .catch(() => ({ success: false, error: 'Unexpected server response' }))
 
-      const script = document.createElement('script');
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.async = true;
-      script.defer = true;
-      
-      script.onload = () => {
-        if (!window.google?.accounts?.id) {
-          reject(new Error('Google Identity Services failed to load properly'));
-          return;
-        }
-        
-        this.initializeGoogleAuth();
-        this.initialized = true;
-        resolve();
-      };
-      
-      script.onerror = () => {
-        reject(new Error('Failed to load Google Identity Services script'));
-      };
-      
-      document.head.appendChild(script);
-    });
+    if (!res.ok || !data.success || !data.data) {
+      throw new Error(data.error || `Login failed (${res.status})`)
+    }
+
+    this.user = data.data.user
+    this.token = data.data.token
+    this.saveToStorage(this.user, this.token)
+    this.notifyListeners()
+
+    return this.user
   }
 
-  private initializeGoogleAuth() {
-    window.google.accounts.id.initialize({
-      client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
-      callback: this.handleCredentialResponse.bind(this),
-      auto_select: false,
-      cancel_on_tap_outside: true,
-    });
-  }
+  /**
+   * Confirm a stored token is still valid (called once on app boot).
+   * A network failure keeps the session — only an explicit rejection clears it.
+   */
+  async verifySession(): Promise<boolean> {
+    if (!this.token) return false
 
-  private async handleCredentialResponse(response: GoogleUser) {
     try {
-      console.log('Received Google credential, sending to backend...');
-      
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3003/api';
-      const result = await fetch(`${apiUrl}/api/auth/google`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ token: response.credential }),
-      });
+      const res = await fetch(`${API_BASE_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${this.token}` },
+      })
 
-      if (!result.ok) {
-        const errorText = await result.text();
-        throw new Error(`Backend error: ${result.status} - ${errorText}`);
+      if (!res.ok) {
+        this.signOut()
+        return false
       }
 
-      const data = await result.json();
-
-      if (data.success) {
-        this.user = data.data.user;
-        this.token = data.data.token;
-        this.saveToStorage(this.user, this.token);
-        this.notifyListeners();
-        console.log('Authentication successful');
-      } else {
-        throw new Error(data.error || 'Authentication failed');
+      const data = await res.json().catch(() => null)
+      if (data?.data?.user) {
+        this.user = data.data.user
+        this.saveToStorage(this.user, this.token)
+        this.notifyListeners()
       }
-    } catch (error) {
-      console.error('Authentication error:', error);
-      throw error;
+      return true
+    } catch {
+      return false
     }
   }
 
-  // Render Google sign-in button directly in provided element
-  renderSignInButton(element: HTMLElement, options?: {
-    theme?: 'outline' | 'filled_blue' | 'filled_black';
-    size?: 'large' | 'medium' | 'small';
-    text?: 'signin_with' | 'signup_with' | 'continue_with' | 'signin';
-    width?: number;
-  }): Promise<void> {
-    return new Promise(async (resolve, reject) => {
+  /** Revoke the session server-side, then clear local state. */
+  async logout(): Promise<void> {
+    if (this.token) {
       try {
-        await this.initialize();
-        
-        window.google.accounts.id.renderButton(element, {
-          theme: options?.theme || 'filled_blue',
-          size: options?.size || 'large',
-          text: options?.text || 'signin_with',
-          type: 'standard',
-          width: options?.width || 250,
-        });
-        
-        resolve();
-      } catch (error) {
-        reject(error);
+        await fetch(`${API_BASE_URL}/auth/logout`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${this.token}` },
+        })
+      } catch {
+        // Best effort — a failed revoke must never block logging out locally.
       }
-    });
-  }
-
-  // Alternative method for programmatic sign-in (if needed)
-  async signInWithGoogle(): Promise<void> {
-    try {
-      await this.initialize();
-      
-      return new Promise((resolve, reject) => {
-        // Try one-tap first
-        window.google.accounts.id.prompt((notification) => {
-          if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-            // If one-tap doesn't work, reject so the UI can show the button
-            reject(new Error('Please use the Google sign-in button'));
-          } else if (notification.isDismissedMoment()) {
-            reject(new Error('Sign-in was dismissed'));
-          }
-        });
-
-        // Listen for successful authentication
-        const originalHandler = this.handleCredentialResponse.bind(this);
-        this.handleCredentialResponse = async (response: GoogleUser) => {
-          try {
-            await originalHandler(response);
-            resolve();
-          } catch (error) {
-            reject(error);
-          }
-        };
-      });
-    } catch (error) {
-      console.error('Sign-in initialization error:', error);
-      throw error;
     }
+
+    this.signOut()
   }
 
+  /** Clear local state only (used by the 401 interceptor and logout). */
   signOut(): void {
-    this.user = null;
-    this.token = null;
-    this.saveToStorage(null, null);
-    this.notifyListeners();
-    
-    if (this.initialized && window.google) {
-      window.google.accounts.id.disableAutoSelect();
-    }
+    this.user = null
+    this.token = null
+    this.saveToStorage(null, null)
+    this.notifyListeners()
   }
 
   getCurrentUser(): User | null {
-    return this.user;
+    return this.user
   }
 
   getToken(): string | null {
-    return this.token;
+    return this.token
   }
 
   onAuthStateChanged(callback: (user: User | null) => void): () => void {
-    this.listeners.push(callback);
-    // Immediately call with current state
-    callback(this.user);
-    
-    // Return unsubscribe function
+    this.listeners.push(callback)
+    // Immediately report the current state
+    callback(this.user)
+
     return () => {
-      this.listeners = this.listeners.filter(listener => listener !== callback);
-    };
+      this.listeners = this.listeners.filter((listener) => listener !== callback)
+    }
   }
 
   isAuthenticated(): boolean {
-    return !!this.user && !!this.token;
+    return !!this.user && !!this.token
   }
 }
 
-export const authService = new AuthService();
-export type { User }; 
+export const authService = new AuthService()

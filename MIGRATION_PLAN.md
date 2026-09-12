@@ -1,7 +1,7 @@
 # ArchiveDrop — Cloudflare Migration Plan
 
 > Status tracker for the full rewrite of ArchiveDrop onto Cloudflare (Workers + Pages + R2) with Groq Whisper transcription.
-> Last updated: 2026-09-12 — **Phases 1–2 code complete** (infra bindings pending: Hyperdrive id, queues, secrets — see `backend-v2/README.md`)
+> Last updated: 2026-09-12 — **Phases 1–2 complete and deployed** (Worker `archivedrop-api` + Pages `archivedrop-app` live in account `cd44a079…`). Auth switched to single-admin login — **no OAuth, no accounts**. Remaining: R2 API token, bucket CORS, `ADMIN_PASSWORD` + `GROQ_API_KEY` secrets (`backend-v2/README.md`).
 
 ---
 
@@ -24,11 +24,12 @@ Non-goals for v1: URL downloads (yt-dlp), social features (likes/comments/feed/t
 | # | Decision | Choice | Notes |
 |---|----------|--------|-------|
 | 1 | Platform downloads (yt-dlp can't run on Workers) | **Drop URL downloads for now** | Direct uploads only at launch. Can add external downloader service or third-party API later without architecture changes. |
-| 2 | Database | **Postgres + Drizzle** | Keep Postgres (schema/search knowledge carries over), Workers-native ORM via Hyperdrive. Provider TBD (see open questions). |
+| 2 | Database | **Postgres + Drizzle** | **Neon** (free tier), reached via Hyperdrive `archivedrop-db`. Use Neon's direct endpoint — no `-pooler`. |
 | 3 | Rebuild style | **Fresh rewrite on Hono** | Reuse schema + lessons learned, not old code. Preserve API shape where sensible. |
-| 4 | Feature scope | **Personal archive focus** | Archive, uploads, captions/lyrics, search, public/private sharing. Likes/comments/feed cut for now. |
+| 4 | Feature scope | **Personal archive focus** | Archive, uploads, captions/lyrics, search. Likes/comments/feed **and** public sharing cut entirely (not deferred). |
 | 5 | Transcription | **Groq Whisper** | `verbose_json` response → real `segments[{start, end, text}]` → maps 1:1 into `caption_segments`. Deletes all Gemini timestamp heuristics. |
 | 6 | Naming / branding | **Keep `ArchiveDrop`, no renames** | Product name is already consistent everywhere in code, UI and infra (`archivedrop-api` Worker, `archivedrop-media` bucket, `archivedrop-db` Hyperdrive). Local folder + GitHub repo stay `archiver` — cosmetic only, zero code references. The `-v2` dir suffixes are temporary and become `backend/`/`frontend/` in Phase 6. |
+| 7 | Auth / accounts | **Single admin, no accounts** | One `ADMIN_USERNAME`/`ADMIN_PASSWORD` login. Google OAuth + session JWTs removed; sessions are opaque tokens in `admin_sessions` (revocable, expiring, SHA-256 stored). `users` keeps exactly one owner row so media/quota stay owner-scoped. No sign-up, no profiles. Engagement columns (`view_count`/`like_count`/`comment_count`) and sharing fields (`visibility`/`public_id`) dropped in migration `0001`. |
 
 ---
 
@@ -90,7 +91,7 @@ Non-goals for v1: URL downloads (yt-dlp), social features (likes/comments/feed/t
 - [x] Caption editor UX concept (timeline, drag/resize segments, undo/redo) — good idea, buggy implementation; rebuild clean
 - [x] Arabic/RTL support (fonts, normalization utils in `arabicTextUtils.ts`) — carry over the utils
 - [x] Caption job state machine (`QUEUED → PROCESSING → COMPLETED/FAILED`) — keep semantics, move execution to Queues
-- [x] Visibility model (`PRIVATE/PUBLIC/UNLISTED` + `publicId`) — keep
+- [ ] ~~Visibility model (`PRIVATE/PUBLIC/UNLISTED` + `publicId`) — keep~~ **DROPPED**: a single admin has no public surface. Columns + the `visibility` enum were removed in migration `0001`; social engagement counters went with them.
 
 ---
 
@@ -129,13 +130,13 @@ Groq Whisper         verbose_json → segments → caption_segments rows
 ### Phase 1 — Backend skeleton + storage (foundation) — **code complete, infra setup pending**
 - [x] Scaffold Hono project + wrangler config (env bindings: R2, Hyperdrive, secrets) → `backend-v2/`
 - [x] Port Prisma schema → Drizzle (v1 tables only) → `backend-v2/src/db/schema.ts` + generated migration `drizzle/0000_*.sql`
-- [x] Google auth on Workers: verify ID token via `jose` against Google JWKS → `src/auth/index.ts`
-- [x] JWT session issuance/verification (`jose`, HS256) + requireAuth/optionalAuth middleware
+- [x] ~~Google auth on Workers via `jose`~~ → **replaced by single-admin login** (constant-time credential check, both fields SHA-256'd before compare) → `src/auth/index.ts`
+- [x] ~~JWT sessions (HS256)~~ → **replaced by opaque DB sessions**: random 256-bit token, only its SHA-256 stored, expiry enforced in the lookup query, revocable on logout → `src/services/sessions.ts`
 - [x] R2 service: presigned PUT/GET via aws4fetch, delete/head via binding → `src/services/r2.ts`
 - [x] Media CRUD routes (list/get/patch/delete) with ownership checks; static routes registered before `/:id` (old unreachable-routes bug can't recur)
 - [x] Presigned upload flow: `/upload/start` (quota check FIRST → media row → presigned PUT) → browser PUT → `/upload/confirm` (R2 head verify → quota re-check → file row)
 - [x] Storage quota via SQL SUM (was: load all rows into JS); MIME allowlist; Zod validation on every route
-- [x] Vitest unit tests (key scheme, MIME allowlist, JWT round-trip) — 10 passing; `tsc --noEmit` strict-clean
+- [x] Vitest unit tests (key scheme, MIME allowlist, admin credential check, session tokens) — 36 passing; `tsc --noEmit` strict-clean
 - [ ] Shared types package (frontend + backend) — defer to Phase 4
 - [ ] **Decision point:** pick Postgres provider (Neon vs alternatives — compare at start of phase)
 - [ ] Infra setup checklist (see `backend-v2/README.md`): create R2 bucket, S3 API token, Hyperdrive binding, secrets, bucket CORS
@@ -173,6 +174,9 @@ backend-v2/
 - [ ] (Optional v2) Durable Object WebSocket for push updates
 
 ### Phase 4 — Frontend cleanup
+- [x] Admin login form (`LoginPage`) + auth service rewrite; Google Sign-In removed
+- [ ] **Remove the remaining social UI** — `CommentSection` plus the like/view stats woven through `VideoView`, `AudioView`, `Sidebar`, `InfoPanel`, `MobileModals`, `TrackInformation` (the API has no social endpoints at all now)
+- [ ] Add a plain logout + admin identity in the navbar (Google avatar no longer exists)
 - [ ] **Define the missing CSS variable design system** (or purge it) — tokens for colors/text/bg/borders in `index.css` + Tailwind
 - [ ] Unify all data fetching on react-query + single `api.ts` (kill raw `axios('/api/…')` calls)
 - [ ] Fix auth double-`/api` prefix; one canonical `VITE_API_URL` convention
@@ -199,7 +203,7 @@ backend-v2/
 
 ## 6. Open questions
 
-- [ ] Postgres provider: Neon vs Supabase vs RDS Proxy/Hyperdrive pricing + fit (decide at Phase 1 start)
+- [x] Postgres provider: **Neon**, via Hyperdrive `archivedrop-db` (`db89e4c4…`). Direct endpoint only — Hyperdrive pools globally, so Neon's PgBouncer would stack two poolers.
 - [ ] Keep old B2 data? If yes, plan a one-off migration script (B2 → R2 with same key layout)
 - [ ] Groq model choice: default `whisper-large-v3-turbo` (fast/cheap, 12% WER); switchable via `GROQ_MODEL` secret (`whisper-large-v3` = 10.3% WER + translation). Benchmark on real audio before deciding finally.
 - [ ] Groq account tier: free tier caps files at 25MB (url mode); dev tier 100MB — decide tier based on real library sizes; chunking only if needed
